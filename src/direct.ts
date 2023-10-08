@@ -2,11 +2,12 @@ import PLazy from "p-lazy"
 import { NEVER, Observable, Unsubscribable, defer, filter, finalize, firstValueFrom, map, mergeMap, of, share, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Allowed, Answer, Call, Remote, Sender, Target } from "./processing"
-import { ObservableAndPromise, WORKER_LOG, generateId } from "./util"
+import { ObservableAndPromise, generateId } from "./util"
 
 export type DirectSenderConfig = {
 
     readonly channel: Channel<Answer, Call>
+    readonly log?: boolean | undefined
 
 }
 
@@ -15,7 +16,7 @@ export class DirectSender implements Sender {
     private readonly connection
     private readonly subscriptions = new Array<string>()
 
-    constructor(config: DirectSenderConfig) {
+    constructor(private readonly config: DirectSenderConfig) {
         this.connection = config.channel.open()
     }
 
@@ -33,8 +34,8 @@ export class DirectSender implements Sender {
     call(command: string, ...data: readonly unknown[]) {
         const promise = PLazy.from(async () => {
             const id = generateId()
-            if (WORKER_LOG) {
-                console.log("[Worker] Sending an execution request", { id, command, data })
+            if (this.config.log) {
+                console.log("[Worker] Sending an asynchronous call", { id, command, data })
             }
             this.connection.next({
                 type: "execute",
@@ -45,6 +46,9 @@ export class DirectSender implements Sender {
             return firstValueFrom(this.connection.pipe(
                 filter(response => response.id === id),
                 map(response => {
+                    if (this.config.log) {
+                        console.log("[Worker/Sender] Received a response to an asynchronous call.", response)
+                    }
                     if (response.type === "fulfilled") {
                         return response.value
                     }
@@ -59,6 +63,9 @@ export class DirectSender implements Sender {
         })
         const observable = defer(() => {
             const id = generateId()
+            if (this.config.log) {
+                console.log("[Worker/Sender] Sending an observable call.", { id, command, data })
+            }
             this.connection.next({
                 type: "subscribe",
                 id,
@@ -69,6 +76,9 @@ export class DirectSender implements Sender {
             return this.connection.pipe(
                 filter(response => response.id === id),
                 mergeMap(response => {
+                    if (this.config.log) {
+                        console.log("[Worker/Sender] Received a response to an observable call.", response)
+                    }
                     if (response.type === "next") {
                         return of(response.value)
                     }
@@ -115,6 +125,7 @@ export type DirectReceiverConfig<T> = {
 
     readonly target: T
     readonly channel: Channel<Call, Answer>
+    readonly log?: boolean | undefined
 
 }
 
@@ -134,14 +145,14 @@ export class DirectReceiver<T extends Target> extends Observable<void> {
     constructor(private readonly config: DirectReceiverConfig<T>) {
         super(subscriber => {
             const subscriptions = new Map<unknown, Unsubscribable>()
-            if (WORKER_LOG) {
+            if (config.log) {
                 console.log("[Worker] Starting receiver.", this.config.channel)
             }
             const connection = this.config.channel.open()
             const sub = connection.pipe(
                 map(call => {
-                    if (WORKER_LOG) {
-                        console.log("[Worker] Receiver received a message.", call)
+                    if (config.log) {
+                        console.log("[Worker/Receiver] Receiver received a message.", call)
                     }
                     if (call.type === "unsubscribe") {
                         const sub = subscriptions.get(call.id)

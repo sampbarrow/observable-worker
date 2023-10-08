@@ -1,10 +1,8 @@
 
 import pDefer from "p-defer"
-import { NextObserver, Observable } from "rxjs"
+import { NextObserver, Observable, Observer, Unsubscribable } from "rxjs"
 import { v4 } from "uuid"
 import { Connection } from "./channel"
-
-export const WORKER_LOG = false
 
 /**
  * Config for utility class for combining and observable and observer.
@@ -39,15 +37,34 @@ export class ObservableAndObserver<I, O> extends Observable<I> implements Connec
 
 }
 
+export interface RemoteSubscribable<T> {
+
+    asObservable(): Observable<T>
+    subscribe(observer: Partial<Observer<T>>): Unsubscribable
+
+}
+
 /**
  * Utility class for combining and observable and promise.
  */
-export class ObservableAndPromise<T> extends Observable<T> implements PromiseLike<T> {
+//TODO causes major browser problems
+//maybe just do subscribable
+export class ObservableAndPromise<T> implements RemoteSubscribable<T>, PromiseLike<T> {
 
-    constructor(observable: Observable<T>, private readonly promise: PromiseLike<T>) {
-        super(subscriber => {
-            return observable.subscribe(subscriber)
+    constructor(private readonly observable: Observable<T>, private readonly promise: PromiseLike<T>) {
+    }
+
+    asObservable() {
+        return new Observable<T>(subscriber => {
+            const subscription = this.observable.subscribe(subscriber)
+            return () => {
+                return subscription.unsubscribe()
+            }
         })
+    }
+
+    subscribe(observer: Partial<Observer<T>>): Unsubscribable {
+        return this.observable.subscribe(observer)
     }
 
     then<TResult1 = T, TResult2 = never>(onFulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) {

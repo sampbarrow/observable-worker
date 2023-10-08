@@ -26,24 +26,9 @@ export interface Closeable<T> {
 export namespace Channel {
 
     /**
-     * Combine and observable and observer into a channel.
+     * A pre-created channel from this window's globalThis.
      */
-    export function combine<I, O>(input: Channel<I, never>, output: Channel<unknown, O>) {
-        return {
-            open: () => {
-                const openedInput = input.open()
-                const openedOutput = output.open()
-                return new ObservableAndObserver({
-                    observable: openedInput,
-                    observer: openedOutput,
-                    close: () => {
-                        openedInput.close()
-                        openedOutput.close()
-                    }
-                })
-            }
-        }
-    }
+    export const SELF = port<never, unknown>({ object: globalThis })
 
     /**
      * Batches sending.
@@ -100,15 +85,6 @@ export namespace Channel {
     }
 
     /**
-     * Creates a channel from this window's globalThis.
-     */
-    export function self() {
-        return port({ object: globalThis })
-    }
-
-    export const SELF = port<never, unknown>({ object: globalThis })
-
-    /**
      * A two way port.
      */
     export type Port<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & HasPostMessage<O>
@@ -129,6 +105,26 @@ export namespace Channel {
                     },
                     close: () => {
                         opened.close?.()
+                    }
+                })
+            }
+        }
+    }
+
+    /**
+     * Combine and observable and observer into a channel.
+     */
+    export function combine<I, O>(input: Channel<I, never>, output: Channel<unknown, O>) {
+        return {
+            open: () => {
+                const openedInput = input.open()
+                const openedOutput = output.open()
+                return new ObservableAndObserver({
+                    observable: openedInput,
+                    observer: openedOutput,
+                    close: () => {
+                        openedInput.close()
+                        openedOutput.close()
                     }
                 })
             }

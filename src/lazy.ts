@@ -3,7 +3,7 @@ import { Observable, ReplaySubject, connectable, first, firstValueFrom, map, mer
 import { Channel } from "./channel"
 import { DirectSender } from "./direct"
 import { Answer, Call, RemoteError, Sender } from "./processing"
-import { ObservableAndPromise, WORKER_LOG } from "./util"
+import { ObservableAndPromise } from "./util"
 
 export interface AutoRetryOptions {
 
@@ -15,6 +15,7 @@ export interface AutoRetryOptions {
 export interface LazySenderConfig extends AutoRetryOptions {
 
     readonly channel: Observable<Channel<Answer, Call>>
+    readonly log?: boolean | undefined
 
 }
 
@@ -24,7 +25,7 @@ export class LazySender implements Sender {
     private readonly connection
 
     constructor(private readonly config: LazySenderConfig) {
-        this.sender = connectable(config.channel.pipe(map(channel => new DirectSender({ channel }))), { connector: () => new ReplaySubject(1) })
+        this.sender = connectable(config.channel.pipe(map(channel => new DirectSender({ channel, log: config.log }))), { connector: () => new ReplaySubject(1) })
         this.connection = this.sender.connect()
     }
 
@@ -47,12 +48,20 @@ export class LazySender implements Sender {
             )
         )
     }
+    //TODO the observableandpromise approach blows up in browser afgter vite compile
     call(command: string, ...data: readonly unknown[]) {
-        if (WORKER_LOG) {
+        if (this.config.log) {
             console.log("[Worker/Migrating] Received command.", { command, data })
         }
-        const promise = PLazy.from(() => firstValueFrom(this.execute(this.config.autoRetryPromises ?? false)).then(sender => sender.call(command, ...data)))
-        const observable = this.execute(this.config.autoRetryObservables ?? true).pipe(switchMap(sender => sender.call(command, ...data)))
+        const promise = PLazy.from(async () => {
+            const sender = await firstValueFrom(this.execute(this.config.autoRetryPromises ?? false))
+            return await sender.call(command, ...data)
+        })
+        const observable = this.execute(this.config.autoRetryObservables ?? true).pipe(
+            switchMap(sender => {
+                return sender.call(command, ...data).asObservable()
+            })
+        )
         return new ObservableAndPromise(observable, promise)
     }
 

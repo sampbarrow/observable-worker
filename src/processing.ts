@@ -1,14 +1,17 @@
 
 import { Observable, Subscribable } from "rxjs"
+import { ObservableAndPromise, RemoteSubscribable } from "./util"
 
 export type Target = object
 export type ID = string | number | symbol
 export type Allowed = Subscribable<unknown> | PromiseLike<unknown> | string | number | boolean | null | undefined | void | bigint | unknown[] | ({ [k: string]: unknown } & { subscribe?: never })
-export type Returning<T> = T extends Observable<infer R> ? Observable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
+export type RemoteType<T> = T extends Observable<infer R> ? RemoteSubscribable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
 export type Members<T extends Target> = { [K in string & keyof T as T[K] extends Allowed | ((...args: any) => Allowed) ? K : never]: T[K] }
 export type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : void[]
-export type Output<T> = T extends ((...args: any) => Allowed) ? Returning<ReturnType<T>> : Returning<T>
-export type Result<T = unknown> = Observable<T> & PromiseLike<T>
+export type Output<T> = T extends ((...args: any) => Allowed) ? RemoteType<ReturnType<T>> : RemoteType<T>
+export type Result<T = unknown> = ObservableAndPromise<T>
+export type ObservableMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends Observable<unknown> ? K : never]: T[K] }
+export type PromiseMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends PromiseLike<unknown> ? K : never]: T[K] }
 
 export type Remote<T extends Target> = {
 
