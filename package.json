@@ -1,0 +1,32 @@
+{
+    "name": "chaos-worker",
+    "license": "MIT",
+    "version": "0.0.1",
+    "sideEffects": false,
+    "scripts": {
+        "build": "rollup -c --configPlugin @rollup/plugin-typescript",
+        "watch": "yarn build -w"
+    },
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "dependencies": {
+        "p-defer": "^4.0.0",
+        "p-lazy": "^4.0.0",
+        "rxjs": "^7.8.1",
+        "throttle-debounce": "^5.0.0",
+        "uuid": "^9.0.1",
+        "value-or-factory": "^0.0.1"
+    },
+    "devDependencies": {
+        "@rollup/plugin-typescript": "^11.1.5",
+        "@types/react": "^18.2.0",
+        "@types/throttle-debounce": "^5.0.0",
+        "@types/uuid": "^9.0.5",
+        "rollup": "^4.0.2",
+        "typescript": "^5.2.2"
+    },
+    "peerDependencies": {
+        "react": "^18.2.0"
+    }
+}
