@@ -8,6 +8,22 @@ export type NewRemote<T extends Target> = {
 
 }
 
+export interface NewRemoteConfig<T> {
+
+    target: T
+
+}
+
+//TODO auto-retries as an option on call
+
+class NewRemoteImpl<T> {
+
+    constructor(private readonly config: NewRemoteConfig<T>) {
+
+    }
+
+}
+
 //TODO this solves browser issues
 type XX = NewRemote<{ a: (a: boolean) => string, b: () => Observable<number> }>
 const yy: XX = "" as any

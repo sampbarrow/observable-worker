@@ -1,5 +1,5 @@
 import PLazy from "p-lazy"
-import { Observable, ReplaySubject, connectable, first, firstValueFrom, map, merge, skip, switchMap } from "rxjs"
+import { Observable, ReplaySubject, connectable, first, firstValueFrom, map, merge, mergeMap, skip, switchMap } from "rxjs"
 import { Channel } from "./channel"
 import { DirectSender } from "./direct"
 import { Answer, Call, RemoteError, Sender } from "./processing"
@@ -42,7 +42,7 @@ export class LazySender implements Sender {
                         return sender
                     }
                     else {
-                        throw new RemoteError(true, "The remote died before a response was received.")
+                        throw new RemoteError(true, "The worker was closed. Please try again.")
                     }
                 })
             )
@@ -54,8 +54,11 @@ export class LazySender implements Sender {
             console.log("[Worker/Migrating] Received command.", { command, data })
         }
         const promise = PLazy.from(async () => {
-            const sender = await firstValueFrom(this.execute(this.config.autoRetryPromises ?? false))
-            return await sender.call(command, ...data)
+            return await firstValueFrom(this.execute(this.config.autoRetryPromises ?? false).pipe(
+                mergeMap(async sender => {
+                    return await sender.call(command, ...data)
+                })
+            ))
         })
         const observable = this.execute(this.config.autoRetryObservables ?? true).pipe(
             switchMap(sender => {
