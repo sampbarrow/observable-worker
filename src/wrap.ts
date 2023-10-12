@@ -2,7 +2,7 @@ import { ValueOrFactory } from "value-or-factory"
 import { BatcherOptions } from "./batcher"
 import { Channel, Closeable } from "./channel"
 import { DirectReceiver } from "./direct"
-import { NewLazySender } from "./newremote"
+import { ChannelWrapper } from "./newremote"
 import { Answer, Call, Remote, Target, proxy } from "./processing"
 
 export type Wrap<T extends Target> = {
@@ -36,7 +36,7 @@ export interface WrapOptions {
 }
 
 export function wrap<T extends Target>(channel: Channel<Answer, Call>, options?: WrapOptions): Wrap<T> {
-    const sender = new NewLazySender({ channel, ...options })
+    const sender = new ChannelWrapper({ channel, ...options })
     return {
         remote: proxy<T>(sender),
         close: () => sender.close()

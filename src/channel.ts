@@ -12,8 +12,8 @@ export interface Connection<I, O> extends Observable<I>, Observer<O> {
 
 export interface Closeable<T> {
 
-    object: T
-    close?(): void
+    readonly object: T
+    close?: () => void
 
 }
 

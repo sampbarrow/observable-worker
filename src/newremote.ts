@@ -1,6 +1,6 @@
 import { NEVER, Observable, ReplaySubject, filter, finalize, first, firstValueFrom, map, merge, mergeMap, of, share, skip, switchMap, throwError } from "rxjs"
 import { Channel, Connection } from "./channel"
-import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, RemoteError, Sender, Target } from "./processing"
+import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, RemoteError, Target, Sender as Wrapper } from "./processing"
 import { generateId } from "./util"
 
 export type NewRemote<T extends Target> = {
@@ -13,15 +13,6 @@ export type NewRemote<T extends Target> = {
 export interface NewRemoteConfig<T> {
 
     target: T
-
-}
-
-//TODO auto-retries as an option on call
-
-export interface AutoRetryOptions {
-
-    readonly autoRetryPromises?: boolean
-    readonly autoRetryObservables?: boolean
 
 }
 
@@ -51,19 +42,21 @@ export interface PromiseResult<T> {
 
 export type NewResult<T> = ObservableResult<T> | PromiseResult<T>
 
-export interface LazySenderConfig extends AutoRetryOptions {
+export interface ChannelWrapperConfig {
 
     readonly channel: Channel<Answer, Call>
     readonly log?: boolean | undefined
+    readonly autoRetryPromises?: boolean | undefined
+    readonly autoRetryObservables?: boolean | undefined
 
 }
 
-export class NewLazySender implements Sender {
+export class ChannelWrapper implements Wrapper {
 
     private readonly channel
     // private readonly connection
 
-    constructor(private readonly config: LazySenderConfig) {
+    constructor(private readonly config: ChannelWrapperConfig) {
         //TODO connectable SHOULD work here but it doesnt
         this.channel = new ReplaySubject<Connection<Answer, Call>>(1)
         config.channel.subscribe(v => {

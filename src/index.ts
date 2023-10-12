@@ -1,5 +1,6 @@
 
 export * from "./channel"
+export * from "./coordinator"
 export * from "./direct"
 export * from "./migrating"
 export * from "./processing"
