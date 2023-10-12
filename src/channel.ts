@@ -1,19 +1,13 @@
-import { NextObserver, Observable, fromEvent, map, mergeMap } from "rxjs"
+import { Observable, Observer, combineLatest, fromEvent, map, mergeMap } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
 import { HasPostMessage, ObservableAndObserver, ObservableAndObserverConfig } from "./util"
 
-export interface Channel<I, O> {
-
-    open(): Connection<I, O>
-
+export interface Channel<I, O> extends Observable<Connection<I, O>> {
 }
 
-export interface Connection<I, O> extends Observable<I>, NextObserver<O> {
-
-    close(): void
-
+export interface Connection<I, O> extends Observable<I>, Observer<O> {
 }
 
 export interface Closeable<T> {
@@ -34,21 +28,19 @@ export namespace Channel {
      * Batches sending.
      */
     export function batching<I, O>(channel: Channel<I[], O[]>, options?: BatcherOptions | undefined) {
-        return {
-            open: () => {
-                const opened = channel.open()
-                const batcher = new Batcher<O>(values => opened.next(values), options)
-                return from({
-                    observable: opened.pipe(mergeMap(items => items)),
+        return channel.pipe(
+            map(connection => {
+                const batcher = new Batcher<O>(values => connection.next(values), options)
+                return from<I, O>({
+                    observable: connection.pipe(mergeMap(items => items)),
                     observer: {
-                        next: (value: O) => {
-                            batcher.add(value)
-                        }
+                        next: batcher.add.bind(batcher),
+                        error: connection.error.bind(connection),
+                        complete: connection.complete.bind(connection),
                     },
-                    close: () => opened.close(),
                 })
-            }
-        }
+            })
+        )
     }
 
     /**
@@ -93,42 +85,41 @@ export namespace Channel {
      * Creates a channel from a port.
      */
     export function port<I = never, O = unknown>(open: ValueOrFactory<Closeable<Port<I, O>>, []>): Channel<I, O> {
-        return {
-            open() {
-                const opened = callOrGet(open)
-                return from({
-                    observable: fromEvent<MessageEvent<I>>(opened.object, "message").pipe(map(_ => _.data)),
-                    observer: {
-                        next: (value: O) => {
-                            opened.object.postMessage(value)
-                        }
+        return new Observable<Connection<I, O>>(subscriber => {
+            const opened = callOrGet(open)
+            subscriber.next(from({
+                observable: fromEvent<MessageEvent<I>>(opened.object, "message").pipe(map(_ => _.data)),
+                observer: {
+                    next: (value: O) => {
+                        opened.object.postMessage(value)
                     },
-                    close: () => {
+                    error: error => {
+                        console.error("Received an error on port.", error)
+                        opened.close?.()
+                    },
+                    complete: () => {
                         opened.close?.()
                     }
-                })
+                },
+            }))
+            return () => {
+                opened.close?.()
             }
-        }
+        })
     }
 
     /**
      * Combine and observable and observer into a channel.
      */
     export function combine<I, O>(input: Channel<I, never>, output: Channel<unknown, O>) {
-        return {
-            open: () => {
-                const openedInput = input.open()
-                const openedOutput = output.open()
+        return combineLatest({ input, output }).pipe(
+            map(connection => {
                 return new ObservableAndObserver({
-                    observable: openedInput,
-                    observer: openedOutput,
-                    close: () => {
-                        openedInput.close()
-                        openedOutput.close()
-                    }
+                    observable: connection.input,
+                    observer: connection.output,
                 })
-            }
-        }
+            })
+        )
     }
 
     /**

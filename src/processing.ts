@@ -1,15 +1,19 @@
 
-import { Observable, Subscribable } from "rxjs"
+import { Observable } from "rxjs"
+import { NewResult, ObservableResult, PromiseResult } from "./newremote"
 import { ObservableAndPromise, RemoteSubscribable } from "./util"
 
 export type Target = object
 export type ID = string | number | symbol
-export type Allowed = Subscribable<unknown> | PromiseLike<unknown> | string | number | boolean | null | undefined | void | bigint | unknown[] | ({ [k: string]: unknown } & { subscribe?: never })
-export type RemoteType<T> = T extends Observable<infer R> ? RemoteSubscribable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
+export type Allowed = Observable<unknown> | PromiseLike<unknown> | string | number | boolean | null | undefined | void | bigint | unknown[] | ({ [k: string]: unknown } & { subscribe?: never, pipe?: never })
+export type RemoteType<T> = T extends Observable<infer R> ? ObservableResult<R> : (T extends PromiseLike<infer R> ? PromiseResult<R> : PromiseResult<T>)
 export type Members<T extends Target> = { [K in string & keyof T as T[K] extends Allowed | ((...args: any) => Allowed) ? K : never]: T[K] }
 export type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : void[]
 export type Output<T> = T extends ((...args: any) => Allowed) ? RemoteType<ReturnType<T>> : RemoteType<T>
-export type Result<T = unknown> = ObservableAndPromise<T>
+
+export type OldResult<T = unknown> = ObservableAndPromise<T>
+export type OldRemoteType<T> = T extends Observable<infer R> ? RemoteSubscribable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
+
 export type ObservableMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends Observable<unknown> ? K : never]: T[K] }
 export type PromiseMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends PromiseLike<unknown> ? K : never]: T[K] }
 
@@ -59,6 +63,25 @@ export type Receiver = Observable<void>
 /**
  * The frontend object that translates calls to messages.
  */
+export interface OldSender {
+
+    /**
+     * Call a command on the remote.
+     * @param command Command name.
+     * @param data Arguments in an array.
+     */
+    call(command: string, ...data: readonly unknown[]): OldResult<unknown>
+
+    /**
+     * Close this sender and disconnect from the remote.
+     */
+    close(): void
+
+}
+
+/**
+ * The frontend object that translates calls to messages.
+ */
 export interface Sender {
 
     /**
@@ -66,7 +89,7 @@ export interface Sender {
      * @param command Command name.
      * @param data Arguments in an array.
      */
-    call(command: string, ...data: readonly unknown[]): Result<unknown>
+    call(command: string, ...data: readonly unknown[]): NewResult<unknown>
 
     /**
      * Close this sender and disconnect from the remote.
@@ -84,6 +107,21 @@ export class RemoteError extends Error {
         super(message, options)
     }
 
+}
+
+/**
+ * Proxy a sender as an object type.
+ * @param sender Sender.
+ * @returns A proxy object.
+ */
+//TODO rm
+export function oldProxy<T extends Target>(sender: OldSender) {
+    const proxy = new Proxy(sender, {
+        get(target, key) {
+            return (...args: unknown[]) => target.call(key as any, ...args as any)
+        }
+    })
+    return proxy as Remote<T>
 }
 
 /**

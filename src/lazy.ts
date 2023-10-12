@@ -1,10 +1,5 @@
-import PLazy from "p-lazy"
-import { Observable, ReplaySubject, connectable, first, firstValueFrom, map, merge, mergeMap, skip, switchMap } from "rxjs"
-import { Channel } from "./channel"
-import { DirectSender } from "./direct"
-import { Answer, Call, RemoteError, Sender } from "./processing"
-import { ObservableAndPromise } from "./util"
 
+/*
 export interface AutoRetryOptions {
 
     readonly autoRetryPromises?: boolean
@@ -19,7 +14,7 @@ export interface LazySenderConfig extends AutoRetryOptions {
 
 }
 
-export class LazySender implements Sender {
+export class LazySender implements OldSender {
 
     private readonly sender
     private readonly connection
@@ -69,3 +64,4 @@ export class LazySender implements Sender {
     }
 
 }
+*/

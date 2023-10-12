@@ -1,10 +1,10 @@
 
-import { EMPTY, MonoTypeOperatorFunction, Subscription, defer, filter, first, map, mergeMap, mergeWith, of, switchMap } from "rxjs"
-import { Channel } from "./channel"
+import { EMPTY, Observable, Subscription, defer, filter, first, map, merge, mergeMap, mergeWith, of, switchMap, tap } from "rxjs"
+import { Channel, Closeable } from "./channel"
 import { DirectReceiver } from "./direct"
-import { AutoRetryOptions, LazySender } from "./lazy"
+import { AutoRetryOptions, NewLazySender } from "./newremote"
 import { Answer, Call, Target, proxy } from "./processing"
-import { acquireWebLock, generateId, observeWebLock } from "./util"
+import { generateId, observeWebLock } from "./util"
 import { Wrap } from "./wrap"
 
 export function registerWithServer(channelId: string, log?: boolean) {
@@ -15,32 +15,36 @@ export function registerWithServer(channelId: string, log?: boolean) {
         const lockId = generateId()
         return observeWebLock(lockId).pipe(
             mergeMap(() => {
-                const registration = Channel.broadcast<RegistrationMessage>(channelId).open()//TODO when to close? also unregister
-                const clientId = generateId()
-                if (log) {
-                    console.log("[Worker/Migration] Registering client " + clientId + " on registration channel " + channelId + ".")
-                }
-                const callChannelId = generateId()
-                const answerChannelId = generateId()
-                const registered = registration.pipe(
-                    filter(message => message.type === "clientRegistered" && message.clientId === clientId),
-                    first(),
-                    map(() => {
-                        return {
-                            callChannelId,
-                            answerChannelId
+                const registration = Channel.broadcast<RegistrationMessage>(channelId)
+                return registration.pipe(
+                    mergeMap(registration => {
+                        const clientId = generateId()
+                        if (log) {
+                            console.log("[Worker/Migration] Registering client " + clientId + " on registration channel " + channelId + ".")
                         }
+                        const callChannelId = generateId()
+                        const answerChannelId = generateId()
+                        const registered = registration.pipe(
+                            filter(message => message.type === "clientRegistered" && message.clientId === clientId),
+                            first(),
+                            map(() => {
+                                return {
+                                    callChannelId,
+                                    answerChannelId
+                                }
+                            })
+                        )
+                        //TODO try to ensure proper priorities or just rely on locks?
+                        registration.next({
+                            type: "registerClient",
+                            clientId,
+                            lockId,
+                            callChannelId,
+                            answerChannelId,
+                        })
+                        return registered
                     })
                 )
-                //TODO try to ensure proper priorities or just rely on locks?
-                registration.next({
-                    type: "registerClient",
-                    clientId,
-                    lockId,
-                    callChannelId,
-                    answerChannelId,
-                })
-                return registered
             })
         )
     })
@@ -51,9 +55,9 @@ export function findAndRegisterWithServer(context: string = DEFAULT_CONTEXT, log
         switchMap(channelId => {
             return registerWithServer(channelId, log)
         }),
-        map(channelIds => {
-            const calls = Channel.batching(Channel.broadcast<Call[]>(channelIds.callChannelId))
-            const answers = Channel.batching(Channel.broadcast<Answer[]>(channelIds.answerChannelId))
+        switchMap(channelIds => {
+            const calls = Channel.batching(Channel.broadcast<Call[]>(channelIds.callChannelId), { log })
+            const answers = Channel.batching(Channel.broadcast<Answer[]>(channelIds.answerChannelId), { log })
             return Channel.combine(answers, calls)
         })
     )
@@ -62,39 +66,43 @@ export function findAndRegisterWithServer(context: string = DEFAULT_CONTEXT, log
 export function findServer(context: string = DEFAULT_CONTEXT, log?: boolean) {
     return defer(() => {
         //TODO close
-        const lookup = Channel.broadcast<LookupMessage>(context).open()
+        const lookup = Channel.broadcast<LookupMessage>(context)
         if (log) {
             console.log("[Worker/Migrating] Asking if a server is available.", { context })
         }
-        lookup.next({
-            type: "askIfServerIsAvailable"
-        })
         return lookup.pipe(
-            mergeMap(message => {
-                if (message.type === "newServerStarted" || message.type === "serverIsAvailable") {
-                    if (log) {
-                        console.log("[Worker/Migrating] Got first message from lookup channel.", { context, message })
-                    }
-                    return of(message.channelId)
-                }
-                else {
-                    return EMPTY
-                }
-            }),
-            first(),
-            mergeWith(lookup.pipe(
-                mergeMap(message => {
-                    if (message.type === "newServerStarted") {
-                        if (log) {
-                            console.log("[Worker/Migrating] A new server has started.", { context, message })
-                        }
-                        return of(message.channelId)
-                    }
-                    else {
-                        return EMPTY
-                    }
+            switchMap(lookup => {
+                lookup.next({
+                    type: "askIfServerIsAvailable"
                 })
-            ))
+                return lookup.pipe(
+                    mergeMap(message => {
+                        if (message.type === "newServerStarted" || message.type === "serverIsAvailable") {
+                            if (log) {
+                                console.log("[Worker/Migrating] Got first message from lookup channel.", { context, message })
+                            }
+                            return of(message.channelId)
+                        }
+                        else {
+                            return EMPTY
+                        }
+                    }),
+                    first(),
+                    mergeWith(lookup.pipe(
+                        mergeMap(message => {
+                            if (message.type === "newServerStarted") {
+                                if (log) {
+                                    console.log("[Worker/Migrating] A new server has started.", { context, message })
+                                }
+                                return of(message.channelId)
+                            }
+                            else {
+                                return EMPTY
+                            }
+                        })
+                    ))
+                )
+            })
         )
     })
 }
@@ -102,140 +110,167 @@ export function findServer(context: string = DEFAULT_CONTEXT, log?: boolean) {
 export const DEFAULT_CONTEXT = "default"
 
 export type LookupMessage = {
-    type: "askIfServerIsAvailable"
+    readonly type: "askIfServerIsAvailable"
 } | {
-    type: "newServerStarted"
-    channelId: string
+    readonly type: "newServerStarted"
+    readonly channelId: string
 } | {
-    type: "serverIsAvailable"
-    channelId: string
+    readonly type: "serverIsAvailable"
+    readonly channelId: string
 }
 
 export type RegistrationMessage = {
-    type: "registerClient"
-    clientId: string
-    lockId: string
-    callChannelId: string
-    answerChannelId: string
+    readonly type: "registerClient"
+    readonly clientId: string
+    readonly lockId: string
+    readonly callChannelId: string
+    readonly answerChannelId: string
 } | {
-    type: "clientRegistered"
-    clientId: string
-}
-
-type RegisterServerConfig<T extends Target> = {
-
-    target: T
-    context?: string
-    log?: boolean
-
+    readonly type: "clientRegistered"
+    readonly clientId: string
 }
 
 function lookupListen(context: string, registrationChannelId: string, log?: boolean) {
-    const lookup = Channel.broadcast<LookupMessage>(context).open()
-    const sub = lookup.subscribe(message => {
-        if (message.type === "askIfServerIsAvailable") {
+    const lookup = Channel.broadcast<LookupMessage>(context)
+    return lookup.pipe(
+        switchMap(lookup => {
             if (log) {
-                console.log("[Worker/Migrating] Received a server availability check on the lookup channel.", { context })
+                console.log("[Worker/Migrating] Sending a server started message on the lookup channel.", { context })
             }
-            lookup.next({
-                type: "serverIsAvailable",
-                channelId: registrationChannelId
-            })
-        }
-    })
-    if (log) {
-        console.log("[Worker/Migrating] Sending a server started message on the lookup channel.", { context })
-    }
-    lookup.next({
-        type: "newServerStarted",
-        channelId: registrationChannelId
-    })
-    return {
-        close: () => {
-            sub.unsubscribe()
-            lookup.close()
-        }
-    }
+            return merge(
+                of({
+                    type: "newServerStarted" as const,
+                    channelId: registrationChannelId
+                }),
+                lookup.pipe(
+                    filter(message => message.type === "askIfServerIsAvailable"),
+                    map(() => {
+                        if (log) {
+                            console.log("[Worker/Migrating] Received a server availability check on the lookup channel.", { context })
+                        }
+                        return {
+                            type: "serverIsAvailable" as const,
+                            channelId: registrationChannelId
+                        }
+                    })
+                )
+            ).pipe(
+                tap(response => {
+                    lookup.next(response)
+                })
+            )
+        })
+    )
 }
 
-export async function exposeMigrating<T extends Target>(config: RegisterServerConfig<T>) {
+type ClientAction = {
+    readonly action: "added"
+    readonly id: string
+    readonly channel: Channel<Call, Answer>
+} | {
+    readonly action: "removed"
+    readonly id: string
+}
 
-    const context = config.context ?? DEFAULT_CONTEXT
-    const clients = new Map<string, Subscription>()
-    const registrationId = generateId()
+export type Coordinator = {
 
-    const close = await acquireWebLock(context)
+    backEnd: Observable<ClientAction>
+    frontEnd: Channel<Answer, Call>
 
-    if (config.log) {
-        console.log("[Worker/Migrating] Exposing a migrating service. Starting a registration channel at " + registrationId + ".", { context })
+}
+
+export namespace Coordinator {
+
+    export function broadcast(context: string = DEFAULT_CONTEXT): Coordinator {
+        return {
+            frontEnd: findAndRegisterWithServer(context, true),//TODO log config options
+            backEnd: observeWebLock(context).pipe(
+                switchMap(() => {
+                    const registrationId = generateId()
+                    const registration = Channel.broadcast<RegistrationMessage>(registrationId)
+                    const lookup = lookupListen(context, registrationId).subscribe()//TODO work into the rxjs chain
+                    return registration.pipe(
+                        switchMap(connection => {
+                            return connection.pipe(
+                                mergeMap(message => {
+                                    if (message.type === "registerClient") {
+                                        connection.next({
+                                            type: "clientRegistered",
+                                            clientId: message.clientId
+                                        })
+                                        if (true) {//TODO
+                                            console.log("[Worker/Migrating] Received a registration request from client " + message.clientId + ".")
+                                        }
+                                        return merge(
+                                            of({
+                                                action: "added" as const,
+                                                id: message.clientId,
+                                                channel: Channel.batching<Call, Answer>(Channel.dualBroadcast(message.callChannelId, message.answerChannelId))
+                                            }),
+                                            observeWebLock(message.lockId).pipe(
+                                                map(() => {
+                                                    return {
+                                                        action: "removed" as const,
+                                                        id: message.clientId,
+                                                    }
+                                                })
+                                            )
+                                        )
+                                    }
+                                    else {
+                                        return EMPTY
+                                    }
+                                })
+                            )
+                        })
+                    )
+                })
+            )
+        }
     }
 
-    const registration = Channel.broadcast<RegistrationMessage>(registrationId).open()
-    registration.subscribe(message => {
+}
 
-        if (config.log) {
-            console.log("[Worker/Migrating] Received a message on registration channel " + registrationId + ".", message)
-        }
+interface ExposeMigratingConfig<T extends Target> {
 
-        if (message.type === "registerClient") {
+    readonly coordinator: Coordinator
+    readonly target: () => Closeable<T>
+    readonly log?: boolean
 
-            if (config.log) {
-                console.log("[Worker/Migrating] Received a registration request from client " + message.clientId + ".")
-                console.log("[Worker/Migrating] Starting a receiver on call channel " + message.callChannelId + " and answer channel " + message.answerChannelId + ".")
-            }
+}
 
-            const channel = Channel.batching<Call, Answer>(Channel.dualBroadcast(message.callChannelId, message.answerChannelId))
+export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<T>) {
+    const clients = new Map<string, Subscription>()
+    const target = config.target()
+    return config.coordinator.backEnd.subscribe(action => {
+        if (action.action === "added") {
             const receiver = new DirectReceiver({
-                channel,
-                target: config.target,
+                channel: action.channel,
+                target: () => {
+                    return {
+                        object: target.object,
+                    }
+                },
                 log: config.log,
             })
-            const sup = receiver.subscribe()
-
-            //TODO client should be able to disconnect without necessarily releasing their lock
-            //also stop listening to this if the expose is closed
-            acquireWebLock(message.lockId).then(() => {
-                sup.unsubscribe()
-                clients.delete(message.clientId)
-            })
-
-            clients.set(message.clientId, sup)
-
-            if (config.log) {
-                console.log("[Worker/Migrating] Sending registration confirmation to client " + message.clientId + ".")
-            }
-            registration.next({
-                type: "clientRegistered",
-                clientId: message.clientId
-            })
-
+            clients.set(action.id, receiver.subscribe())
         }
-
+        else {
+            clients.get(action.id)?.unsubscribe()
+            clients.delete(action.id)
+        }
     })
+}
 
-    const lookup = lookupListen(context, registrationId)
+export interface WrapMigratingConfig extends AutoRetryOptions {
 
-    return {
-        close: () => {
-            lookup.close()
-            registration.close()
-            close()
-        }
-    }
+    readonly coordinator: Coordinator
+    readonly log?: boolean
 
 }
 
-export interface MigratingWrapConfig extends AutoRetryOptions {
-
-    context?: string
-    pipe?: MonoTypeOperatorFunction<Channel<Answer, Call>>
-    log?: boolean
-
-}
-
-export function wrapMigrating<T extends Target>(config: MigratingWrapConfig = {}): Wrap<T> {
-    const s = findAndRegisterWithServer(config.context, config.log).pipe(config.pipe ?? (_ => _))
-    const sender = new LazySender({ ...config, channel: s, log: config.log })
+export function wrapMigrating<T extends Target>(config: WrapMigratingConfig): Wrap<T> {
+    const sender = new NewLazySender({ log: config.log, channel: config.coordinator.frontEnd })
     return {
         remote: proxy<T>(sender),
         close: () => sender.close()

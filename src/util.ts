@@ -1,6 +1,6 @@
 
 import pDefer from "p-defer"
-import { NextObserver, Observable, Observer, Unsubscribable } from "rxjs"
+import { Observable, Observer, Unsubscribable } from "rxjs"
 import { v4 } from "uuid"
 import { Connection } from "./channel"
 
@@ -10,7 +10,7 @@ import { Connection } from "./channel"
 export type ObservableAndObserverConfig<I, O> = {
 
     readonly observable: Observable<I>
-    readonly observer: NextObserver<O>
+    readonly observer: Observer<O>
 
     close?(): void
 
@@ -27,12 +27,14 @@ export class ObservableAndObserver<I, O> extends Observable<I> implements Connec
         })
     }
 
-    close() {
-        return this.config.close?.()
+    complete() {
+        return this.config.observer.complete()
     }
-
     next(value: O) {
-        this.config.observer.next(value)
+        return this.config.observer.next(value)
+    }
+    error(error: unknown) {
+        return this.config.observer.error(error)
     }
 
 }

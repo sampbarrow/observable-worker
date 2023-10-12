@@ -13,11 +13,15 @@ import { Observable } from "rxjs"
 type WorkerService = {
 
     observeValue(): Observable<number>
+    getValue(): Promise<number>
 
 }
 
 const worker = wrapWorker<WorkerService>(new URL("/src/app/DedicatedWorker.ts", import.meta.url), { type: 'module' })
-worker.observeValue().subscribe(value => {
+worker.observeValue().observe().subscribe(value => {
+    console.log("Got a value: " + value + ".)
+})
+worker.getValue().execute().then(value => {
     console.log("Got a value: " + value + ".)
 })
 ```
