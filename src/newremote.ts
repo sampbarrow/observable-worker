@@ -1,6 +1,6 @@
 import { NEVER, Observable, ReplaySubject, filter, finalize, first, firstValueFrom, map, merge, mergeMap, of, share, skip, switchMap, throwError } from "rxjs"
 import { Channel, Connection } from "./channel"
-import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, RemoteError, Target, Sender as Wrapper } from "./processing"
+import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, RemoteError, Target, Wrapper } from "./processing"
 import { generateId } from "./util"
 
 export type NewRemote<T extends Target> = {
@@ -57,12 +57,11 @@ export class ChannelWrapper implements Wrapper {
     // private readonly connection
 
     constructor(private readonly config: ChannelWrapperConfig) {
-        //TODO connectable SHOULD work here but it doesnt
+        //TODO connectable SHOULD work here but it doesnt - look at it later
         this.channel = new ReplaySubject<Connection<Answer, Call>>(1)
         config.channel.subscribe(v => {
             this.channel.next(v)
         })
-        //TODO how do we close this?
         //TODO make sure closing this kills all the subscriptions
         //this.channel = config.channel.pipe(shareReplay({ refCount: true, bufferSize: 1 }))
         // this.channel = connectable(config.channel.pipe(map(_ => _.open())), { connector: () => new ReplaySubject(1) })

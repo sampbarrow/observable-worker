@@ -1,7 +1,6 @@
 
 import { Observable } from "rxjs"
 import { NewResult, ObservableResult, PromiseResult } from "./newremote"
-import { ObservableAndPromise, RemoteSubscribable } from "./util"
 
 export type Target = object
 export type ID = string | number | symbol
@@ -11,8 +10,10 @@ export type Members<T extends Target> = { [K in string & keyof T as T[K] extends
 export type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : void[]
 export type Output<T> = T extends ((...args: any) => Allowed) ? RemoteType<ReturnType<T>> : RemoteType<T>
 
-export type OldResult<T = unknown> = ObservableAndPromise<T>
-export type OldRemoteType<T> = T extends Observable<infer R> ? RemoteSubscribable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
+//TODO cleanup
+
+//export type OldResult<T = unknown> = ObservableAndPromise<T>
+//export type OldRemoteType<T> = T extends Observable<infer R> ? RemoteSubscribable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
 
 export type ObservableMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends Observable<unknown> ? K : never]: T[K] }
 export type PromiseMembers<T extends Target> = { [K in keyof T as Output<T[K]> extends PromiseLike<unknown> ? K : never]: T[K] }
@@ -58,31 +59,12 @@ export type Answer = {
 /**
  * The backend object that receives calls and sends back answers. It's an observable, so to start running it, just subscribe to it.
  */
-export type Receiver = Observable<void>
+export type Exposed = Observable<void>
 
 /**
  * The frontend object that translates calls to messages.
  */
-export interface OldSender {
-
-    /**
-     * Call a command on the remote.
-     * @param command Command name.
-     * @param data Arguments in an array.
-     */
-    call(command: string, ...data: readonly unknown[]): OldResult<unknown>
-
-    /**
-     * Close this sender and disconnect from the remote.
-     */
-    close(): void
-
-}
-
-/**
- * The frontend object that translates calls to messages.
- */
-export interface Sender {
+export interface Wrapper {
 
     /**
      * Call a command on the remote.
@@ -110,26 +92,11 @@ export class RemoteError extends Error {
 }
 
 /**
- * Proxy a sender as an object type.
+ * Proxy a wrapper as an object type.
  * @param sender Sender.
  * @returns A proxy object.
  */
-//TODO rm
-export function oldProxy<T extends Target>(sender: OldSender) {
-    const proxy = new Proxy(sender, {
-        get(target, key) {
-            return (...args: unknown[]) => target.call(key as any, ...args as any)
-        }
-    })
-    return proxy as Remote<T>
-}
-
-/**
- * Proxy a sender as an object type.
- * @param sender Sender.
- * @returns A proxy object.
- */
-export function proxy<T extends Target>(sender: Sender) {
+export function proxy<T extends Target>(sender: Wrapper) {
     const proxy = new Proxy(sender, {
         get(target, key) {
             return (...args: unknown[]) => target.call(key as any, ...args as any)

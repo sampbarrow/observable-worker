@@ -1,7 +1,6 @@
-import { EMPTY, Observable, OperatorFunction, Unsubscribable, catchError, finalize, from, map, mergeMap, of, switchMap, throwError } from "rxjs"
-import { ValueOrFactory, callOrGet } from "value-or-factory"
-import { Channel, Closeable } from "./channel"
-import { Allowed, Answer, Call, Target } from "./processing"
+import { EMPTY, Observable, ObservableInput, OperatorFunction, Unsubscribable, catchError, from, map, mergeMap, of, switchMap, throwError } from "rxjs"
+import { Channel } from "./channel"
+import { Allowed, Answer, Call, Exposed, Target } from "./processing"
 
 export type ReceiveConfig<T extends Target> = {
 
@@ -112,13 +111,13 @@ export function receive<T extends Target>(config: ReceiveConfig<T>): OperatorFun
 
 export type DirectReceiverConfig<T> = {
 
-    readonly target: ValueOrFactory<Closeable<T>>
+    readonly target: ObservableInput<T>
     readonly channel: Channel<Call, Answer>
     readonly log?: boolean | undefined
 
 }
 
-export class DirectReceiver<T extends Target> extends Observable<void> {
+export class DirectReceiver<T extends Target> extends Observable<void> implements Exposed {
 
     constructor(private readonly config: DirectReceiverConfig<T>) {
         super(subscriber => {
@@ -128,92 +127,92 @@ export class DirectReceiver<T extends Target> extends Observable<void> {
             }
             const sub = this.config.channel.pipe(
                 switchMap(connection => {
-                    const target = callOrGet(config.target)
-                    return connection.pipe(
-                        finalize(() => {
-                            target.close?.()
-                        }),
-                        mergeMap(call => {
-                            if (config.log) {
-                                console.log("[Worker/Receiver] Receiver received a message.", call)
-                            }
-                            if (call.type === "unsubscribe") {
-                                const sub = subscriptions.get(call.id)
-                                if (sub === undefined) {
-                                    connection.error(new Error("Tried to unsubscribe from a non-existent subscription (" + call.id?.toString() + ")."))
-                                    return EMPTY
-                                }
-                                sub.unsubscribe()
-                                subscriptions.delete(call.id)
-                            }
-                            else {
-                                try {
-                                    if (typeof call !== "object") {
-                                        throw new Error("Command is not an object. Are you trying to connect a batching worker with a non-batching client, or vice versa?")
+                    return from(config.target).pipe(
+                        switchMap(target => {
+                            return connection.pipe(
+                                mergeMap(call => {
+                                    if (config.log) {
+                                        console.log("[Worker/Receiver] Receiver received a message.", call)
                                     }
-                                    if (!(call.command in target.object)) {
-                                        throw new Error("Command " + call.command.toString() + " does not exist.")
-                                    }
-                                    const property = target.object[call.command as keyof T]
-                                    const input = (() => {
-                                        if (typeof property === "function") {
-                                            return property.call(target.object, ...call.data) as Allowed
+                                    if (call.type === "unsubscribe") {
+                                        const sub = subscriptions.get(call.id)
+                                        if (sub === undefined) {
+                                            connection.error(new Error("Tried to unsubscribe from a non-existent subscription (" + call.id?.toString() + ")."))
+                                            return EMPTY
                                         }
-                                        else {
-                                            return property as Allowed
-                                        }
-                                    })()
-                                    if (typeof input === "object" && input !== null && "subscribe" in input && input.subscribe !== undefined) {
-                                        subscriptions.set(call.id, input.subscribe({
-                                            next: value => {
-                                                connection.next({
-                                                    id: call.id,
-                                                    type: "next",
-                                                    value
-                                                })
-                                            },
-                                            error: error => {
-                                                connection.next({
-                                                    id: call.id,
-                                                    type: "error",
-                                                    error
-                                                })
-                                            },
-                                            complete: () => {
-                                                connection.next({
-                                                    id: call.id,
-                                                    type: "complete"
-                                                })
-                                            }
-                                        }))
+                                        sub.unsubscribe()
+                                        subscriptions.delete(call.id)
                                     }
                                     else {
-                                        const value = (async () => await input)()
-                                        value.then(value => {
-                                            connection.next({
-                                                id: call.id,
-                                                type: "fulfilled",
-                                                value
-                                            })
-                                        })
-                                        value.catch(error => {
+                                        try {
+                                            if (typeof call !== "object") {
+                                                throw new Error("Command is not an object. Are you trying to connect a batching worker with a non-batching client, or vice versa?")
+                                            }
+                                            if (!(call.command in target)) {
+                                                throw new Error("Command " + call.command.toString() + " does not exist.")
+                                            }
+                                            const property = target[call.command as keyof T]
+                                            const input = (() => {
+                                                if (typeof property === "function") {
+                                                    return property.call(target, ...call.data) as Allowed
+                                                }
+                                                else {
+                                                    return property as Allowed
+                                                }
+                                            })()
+                                            if (typeof input === "object" && input !== null && "subscribe" in input && input.subscribe !== undefined) {
+                                                subscriptions.set(call.id, input.subscribe({
+                                                    next: value => {
+                                                        connection.next({
+                                                            id: call.id,
+                                                            type: "next",
+                                                            value
+                                                        })
+                                                    },
+                                                    error: error => {
+                                                        connection.next({
+                                                            id: call.id,
+                                                            type: "error",
+                                                            error
+                                                        })
+                                                    },
+                                                    complete: () => {
+                                                        connection.next({
+                                                            id: call.id,
+                                                            type: "complete"
+                                                        })
+                                                    }
+                                                }))
+                                            }
+                                            else {
+                                                const value = (async () => await input)()
+                                                value.then(value => {
+                                                    connection.next({
+                                                        id: call.id,
+                                                        type: "fulfilled",
+                                                        value
+                                                    })
+                                                })
+                                                value.catch(error => {
+                                                    connection.next({
+                                                        id: call.id,
+                                                        type: "error",
+                                                        error
+                                                    })
+                                                })
+                                            }
+                                        }
+                                        catch (error) {
                                             connection.next({
                                                 id: call.id,
                                                 type: "error",
                                                 error
                                             })
-                                        })
+                                        }
                                     }
-                                }
-                                catch (error) {
-                                    connection.next({
-                                        id: call.id,
-                                        type: "error",
-                                        error
-                                    })
-                                }
-                            }
-                            return EMPTY
+                                    return EMPTY
+                                })
+                            )
                         })
                     )
                 }),

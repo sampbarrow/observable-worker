@@ -1,5 +1,6 @@
 import { EMPTY, Observable, filter, map, mergeMap, of, partition, switchMap } from "rxjs"
 import { Channel } from "./channel"
+import { Answer, Call } from "./processing"
 
 export type ExclusiveMessage<I> = {
     type: "start"
@@ -12,7 +13,13 @@ export type ExclusiveMessage<I> = {
     value: I
 }
 
-function startAndStopSender<I, O>(condition: Observable<boolean>, channel: Channel<ExclusiveMessage<I>, ExclusiveMessage<O>>): Channel<I, O> {
+export type WrapExclusiveConfig = {
+
+    channel: Channel<Call, Answer>
+
+}
+
+export function startAndStopSender<I, O>(condition: Observable<boolean>, channel: Channel<ExclusiveMessage<I>, ExclusiveMessage<O>>): Channel<I, O> {
     return condition.pipe(
         switchMap(condition => {
             if (condition) {
@@ -46,7 +53,7 @@ function startAndStopSender<I, O>(condition: Observable<boolean>, channel: Chann
     )
 }
 
-function startAndStopChannel<I, O>(channel: Channel<ExclusiveMessage<I>, ExclusiveMessage<O>>) {
+export function startAndStopChannel<I, O>(channel: Channel<ExclusiveMessage<I>, ExclusiveMessage<O>>) {
     return channel.pipe(
         switchMap(connection => {
             const [commands, management] = partition(connection, _ => _.type === "value")

@@ -1,46 +1,27 @@
 
-import { Subscription } from "rxjs"
-import { ValueOrFactory, callOrGet } from "value-or-factory"
-import { Closeable } from "./channel"
+import { ObservableInput, Subscription, from, shareReplay } from "rxjs"
 import { Coordinator } from "./coordinator"
 import { DirectReceiver } from "./direct"
 import { ChannelWrapper } from "./newremote"
 import { Target, proxy } from "./processing"
 import { Wrap } from "./wrap"
 
-export const DEFAULT_CONTEXT = "default"
-
-export type RegistrationMessage = {
-    readonly type: "registerClient"
-    readonly clientId: string
-    readonly lockId: string
-    readonly callChannelId: string
-    readonly answerChannelId: string
-} | {
-    readonly type: "clientRegistered"
-    readonly clientId: string
-}
-
 interface ExposeMigratingConfig<T extends Target> {
 
     readonly coordinator: Coordinator
-    readonly target: ValueOrFactory<Closeable<T>>
+    readonly target: ObservableInput<T>
     readonly log?: boolean
 
 }
 
 export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<T>) {
     const clients = new Map<string, Subscription>()
-    const target = callOrGet(config.target)
+    const target = from(config.target).pipe(shareReplay())
     return config.coordinator.backEnd.subscribe(action => {
         if (action.action === "added") {
             const receiver = new DirectReceiver({
                 channel: action.channel,
-                target: () => {
-                    return {
-                        object: target.object,
-                    }
-                },
+                target: target,
                 log: config.log,
             })
             clients.set(action.id, receiver.subscribe())

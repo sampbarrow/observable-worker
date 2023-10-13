@@ -1,7 +1,8 @@
 
 import pDefer from "p-defer"
-import { Observable, Observer, Unsubscribable } from "rxjs"
+import { Observable, Observer } from "rxjs"
 import { v4 } from "uuid"
+import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Connection } from "./channel"
 
 /**
@@ -11,8 +12,6 @@ export type ObservableAndObserverConfig<I, O> = {
 
     readonly observable: Observable<I>
     readonly observer: Observer<O>
-
-    close?(): void
 
 }
 
@@ -35,42 +34,6 @@ export class ObservableAndObserver<I, O> extends Observable<I> implements Connec
     }
     error(error: unknown) {
         return this.config.observer.error(error)
-    }
-
-}
-
-export interface RemoteSubscribable<T> {
-
-    asObservable(): Observable<T>
-    subscribe(observer: Partial<Observer<T>>): Unsubscribable
-
-}
-
-/**
- * Utility class for combining and observable and promise.
- */
-//TODO causes major browser problems
-//maybe just do subscribable
-export class ObservableAndPromise<T> implements RemoteSubscribable<T>, PromiseLike<T> {
-
-    constructor(private readonly observable: Observable<T>, private readonly promise: PromiseLike<T>) {
-    }
-
-    asObservable() {
-        return new Observable<T>(subscriber => {
-            const subscription = this.observable.subscribe(subscriber)
-            return () => {
-                return subscription.unsubscribe()
-            }
-        })
-    }
-
-    subscribe(observer: Partial<Observer<T>>): Unsubscribable {
-        return this.observable.subscribe(observer)
-    }
-
-    then<TResult1 = T, TResult2 = never>(onFulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) {
-        return this.promise.then(onFulfilled, onRejected)
     }
 
 }
@@ -117,4 +80,17 @@ export function observeWebLock(name: string, options?: Omit<LockOptions, "signal
  */
 export function generateId() {
     return v4()
+}
+
+/**
+ * A deferred observable that performs a cleanup action on unsubscribe.
+ */
+export function closing<T>(factory: ValueOrFactory<T>, close: (value: T) => void) {
+    return new Observable<T>(subscriber => {
+        const value = callOrGet(factory)
+        subscriber.next(value)
+        return () => {
+            close(value)
+        }
+    })
 }
