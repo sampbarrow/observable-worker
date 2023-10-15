@@ -19,6 +19,7 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
     const clients = new Map<string, Subscription>()
     return config.coordinator.backEnd.subscribe(action => {
         if (action.action === "added") {
+            //TODO make some kind of observable that keeps a registry maybe, to abstract this
             const target = callOrGet(config.target, action.id)
             const receiver = new DirectReceiver({
                 channel: action.channel,
