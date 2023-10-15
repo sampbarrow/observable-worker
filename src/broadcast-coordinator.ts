@@ -4,9 +4,9 @@ import { Coordinator, DEFAULT_CONTEXT } from "./coordinator"
 import { Answer, Call } from "./processing"
 import { generateId, observeWebLock } from "./util"
 
-export function broadcastCoordinator(context: string = DEFAULT_CONTEXT): Coordinator {
+export function broadcastCoordinator(context: string = DEFAULT_CONTEXT, log?: boolean): Coordinator {
     return {
-        frontEnd: findAndRegisterWithServer(context, true),//TODO log config options
+        frontEnd: findAndRegisterWithServer(context, log),
         backEnd: observeWebLock(context).pipe(
             switchMap(() => {
                 const registrationId = generateId()
@@ -21,14 +21,14 @@ export function broadcastCoordinator(context: string = DEFAULT_CONTEXT): Coordin
                                         type: "clientRegistered",
                                         clientId: message.clientId
                                     })
-                                    if (true) {//TODO
+                                    if (log) {
                                         console.log("[Worker/Migrating] Received a registration request from client " + message.clientId + ".")
                                     }
                                     return merge(
                                         of({
                                             action: "added" as const,
                                             id: message.clientId,
-                                            channel: Channel.batching<Call, Answer>(Channel.dualBroadcast(message.callChannelId, message.answerChannelId))
+                                            channel: Channel.batching<Call, Answer>(Channel.dualBroadcast(message.callChannelId, message.answerChannelId), { log })
                                         }),
                                         observeWebLock(message.lockId).pipe(
                                             map(() => {

@@ -1,6 +1,6 @@
 import { debounce } from "throttle-debounce";
 
-const DEFAULT_DEBOUNCE_TIME = 10
+const DEFAULT_DEBOUNCE_TIME = 1
 
 export interface BatcherOptions {
 

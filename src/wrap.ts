@@ -18,7 +18,7 @@ export interface WrapBatchingOptions extends BatcherOptions {
 }
 
 export function wrapBatching<T extends Target>(options: WrapBatchingOptions): Wrap<T> {
-    return wrap(Channel.batching(options.channel, options), options)
+    return wrap(Channel.batching(options.channel, { log: options.log, debounceTime: options.debounceTime }), { log: options.log })
 }
 
 export interface WrapOptions {
@@ -35,7 +35,7 @@ export type Wrap<T extends Target> = {
 }
 
 export function wrap<T extends Target>(channel: Channel<Answer, Call>, options?: WrapOptions): Wrap<T> {
-    const sender = new ChannelWrapper({ channel, ...options })
+    const sender = new ChannelWrapper({ ...options, channel })
     return {
         remote: proxy<T>(sender),
         close: () => sender.close()

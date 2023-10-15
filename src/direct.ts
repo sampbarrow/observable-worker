@@ -123,12 +123,18 @@ export class DirectReceiver<T extends Target> extends Observable<void> implement
         super(subscriber => {
             const subscriptions = new Map<unknown, Unsubscribable>()
             if (config.log) {
-                console.log("[Worker] Starting receiver.", this.config.channel)
+                console.log("[Worker/Receiver] Starting receiver.", this.config.channel)
             }
             const sub = this.config.channel.pipe(
                 switchMap(connection => {
+                    if (config.log) {
+                        console.log("[Worker/Receiver] Got a connection.", connection)
+                    }
                     return from(config.target).pipe(
                         switchMap(target => {
+                            if (config.log) {
+                                console.log("[Worker/Receiver] Got a target.", target)
+                            }
                             return connection.pipe(
                                 mergeMap(call => {
                                     if (config.log) {

@@ -175,6 +175,9 @@ export class ChannelWrapper implements Wrapper {
                             command,
                             data
                         })
+                        if (this.config.log) {
+                            console.log("[Worker/Sender] Asynchronous call has been sent.", { connection, id, command, data })
+                        }
                         return piped
                     })
                 ))

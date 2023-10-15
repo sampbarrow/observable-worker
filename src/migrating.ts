@@ -1,5 +1,6 @@
 
-import { ObservableInput, Subscription, from, shareReplay } from "rxjs"
+import { Observable, Subscription } from "rxjs"
+import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Coordinator } from "./coordinator"
 import { DirectReceiver } from "./direct"
 import { ChannelWrapper } from "./newremote"
@@ -9,16 +10,16 @@ import { Wrap } from "./wrap"
 interface ExposeMigratingConfig<T extends Target> {
 
     readonly coordinator: Coordinator
-    readonly target: ObservableInput<T>
     readonly log?: boolean
+    readonly target: ValueOrFactory<Observable<T>, [unknown]>
 
 }
 
 export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<T>) {
     const clients = new Map<string, Subscription>()
-    const target = from(config.target).pipe(shareReplay())
     return config.coordinator.backEnd.subscribe(action => {
         if (action.action === "added") {
+            const target = callOrGet(config.target, action.id)
             const receiver = new DirectReceiver({
                 channel: action.channel,
                 target: target,
