@@ -48,6 +48,7 @@ export function wrapMigrating<T extends Target>(config: WrapMigratingConfig): Wr
     const sender = new ChannelWrapper({ log: config.log, autoRetryObservables: config.autoRetryObservables, autoRetryPromises: config.autoRetryPromises, channel: config.coordinator.frontEnd })
     return {
         remote: proxy<T>(sender),
+        connected: () => sender.connected(),
         close: () => sender.close()
     }
 }

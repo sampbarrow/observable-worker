@@ -38,6 +38,34 @@ export class ObservableAndObserver<I, O> extends Observable<I> implements Connec
 
 }
 
+/*
+/**
+ * Utility class for combining and observable and promise.
+ *
+export class ObservableAndPromise<T> extends Observable<T> implements PromiseLike<T> {
+
+    constructor(private readonly observable: Observable<T>, private readonly promise: PromiseLike<T>) {
+        super(subscriber => {
+            const subscription = this.observable.subscribe(subscriber)
+            return () => {
+                return subscription.unsubscribe()
+            }
+        })
+    }
+
+    /*
+    subscribe(observer: Partial<Observer<T>>): Unsubscribable {
+        return this.observable.subscribe(observer)
+    }
+    
+
+    then<TResult1 = T, TResult2 = never>(onFulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) {
+        return this.promise.then(onFulfilled, onRejected)
+    }
+
+}
+*/
+
 /**
  * Utility type for anything that has a postMessage method.
  */

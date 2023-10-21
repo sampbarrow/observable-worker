@@ -68,6 +68,9 @@ export class ChannelWrapper implements Wrapper {
         //  this.connection = this.channel.connect()
     }
 
+    connected() {
+        return this.channel.pipe(map(() => void 0))
+    }
     close() {
         this.channel.complete()
         // this.connection.unsubscribe()
