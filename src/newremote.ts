@@ -1,8 +1,8 @@
 import PLazy from "p-lazy"
 import { NEVER, ReplaySubject, filter, finalize, first, firstValueFrom, map, merge, mergeMap, of, share, skip, switchMap, throwError } from "rxjs"
 import { Channel, Connection } from "./channel"
-import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, RemoteError, Target, Wrapper } from "./processing"
-import { ObservableAndPromise, generateId } from "./util"
+import { Answer, Call, Input, ObservableMembers, Output, PromiseMembers, Target, Wrapper } from "./processing"
+import { ObservableAndPromise, RemoteError, generateId } from "./util"
 
 export type NewRemote<T extends Target> = {
 
@@ -73,13 +73,12 @@ export class ChannelWrapper implements Wrapper {
                         return sender
                     }
                     else {
-                        throw new RemoteError(true, "The worker was closed. Please try again.")
+                        throw new RemoteError("worker-disappeared", "The worker was closed. Please try again.")
                     }
                 })
             )
         )
     }
-
 
     call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
         if (this.config.log) {
@@ -113,7 +112,7 @@ export class ChannelWrapper implements Wrapper {
                             return NEVER
                         }
                         else {
-                            return throwError(() => "Received an invalid response to an observable call.")
+                            return throwError(() => new RemoteError("invalid-message", "Received an invalid response to an observable call."))
                         }
                     }),
                     finalize(() => {
@@ -152,11 +151,11 @@ export class ChannelWrapper implements Wrapper {
                                 return throwError(() => response.error)
                             }
                             else {
-                                return throwError(() => "Received an invalid response to a promise call.")
+                                return throwError(() => new RemoteError("invalid-message", "Received an invalid response to a promise call."))
                             }
-                        }),
+                        })
                     )
-                }),
+                })
             ))
         })
         return new ObservableAndPromise(observable, promise)

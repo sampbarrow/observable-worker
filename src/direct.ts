@@ -1,6 +1,7 @@
 import { EMPTY, Observable, ObservableInput, OperatorFunction, Unsubscribable, catchError, from, map, mergeMap, of, switchMap, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Allowed, Answer, Call, Exposed, Target } from "./processing"
+import { RemoteError } from "./util"
 
 export type ReceiveConfig<T extends Target> = {
 
@@ -202,7 +203,7 @@ export class DirectReceiver<T extends Target> extends Observable<void> implement
                                                     connection.next({
                                                         id: call.id,
                                                         type: "error",
-                                                        error: new Error("Trying to treat a promise as an observable.")
+                                                        error: new RemoteError("invalid-message", "Trying to treat a promise as an observable.")
                                                     })
                                                 }
                                             }
@@ -211,7 +212,7 @@ export class DirectReceiver<T extends Target> extends Observable<void> implement
                                                     connection.next({
                                                         id: call.id,
                                                         type: "error",
-                                                        error: new Error("Trying to treat an observable as a promise.")
+                                                        error: new RemoteError("invalid-message", "Trying to treat an observable as a promise.")
                                                     })
                                                 }
                                                 else {

@@ -80,17 +80,6 @@ export interface Wrapper {
 }
 
 /**
- * A special error with a retryable property, used when a migrating worker dies.
- */
-export class RemoteError extends Error {
-
-    constructor(readonly retryable: boolean, message?: string, options?: ErrorOptions) {
-        super(message, options)
-    }
-
-}
-
-/**
  * Proxy a wrapper as an object type.
  * @param sender Sender.
  * @returns A proxy object.
