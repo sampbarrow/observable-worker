@@ -9,6 +9,7 @@ export type ReceiveConfig<T extends Target> = {
 
 }
 
+//TODO rm
 export function receive<T extends Target>(config: ReceiveConfig<T>): OperatorFunction<Call, Answer> {
     const subscriptions = new Map<unknown, Unsubscribable>()
     if (config.log) {
@@ -141,12 +142,18 @@ export class DirectReceiver<T extends Target> extends Observable<void> implement
                                         console.log("[Worker/Receiver] Receiver received a message.", call)
                                     }
                                     if (call.type === "unsubscribe") {
-                                        const sub = subscriptions.get(call.id)
-                                        if (sub === undefined) {
+                                        const subscription = subscriptions.get(call.id)
+                                        /*
+                                        if (subscription === undefined) {
+                                            return EMPTY
+                                        }*/
+                                        //TODO if we treat an obs as a promise, itll send back an error
+                                        //wont it then try to unsubscribe? thatll trigger this
+                                        if (subscription === undefined) {
                                             connection.error(new Error("Tried to unsubscribe from a non-existent subscription (" + call.id?.toString() + ")."))
                                             return EMPTY
                                         }
-                                        sub.unsubscribe()
+                                        subscription.unsubscribe()
                                         subscriptions.delete(call.id)
                                     }
                                     else {
@@ -166,46 +173,64 @@ export class DirectReceiver<T extends Target> extends Observable<void> implement
                                                     return property as Allowed
                                                 }
                                             })()
-                                            if (typeof input === "object" && input !== null && "subscribe" in input && input.subscribe !== undefined) {
-                                                subscriptions.set(call.id, input.subscribe({
-                                                    next: value => {
+                                            if (call.type === "subscribe") {
+                                                if (typeof input === "object" && input !== null && "subscribe" in input && input.subscribe !== undefined) {
+                                                    subscriptions.set(call.id, input.subscribe({
+                                                        next: value => {
+                                                            connection.next({
+                                                                id: call.id,
+                                                                type: "next",
+                                                                value
+                                                            })
+                                                        },
+                                                        error: error => {
+                                                            connection.next({
+                                                                id: call.id,
+                                                                type: "error",
+                                                                error
+                                                            })
+                                                        },
+                                                        complete: () => {
+                                                            connection.next({
+                                                                id: call.id,
+                                                                type: "complete"
+                                                            })
+                                                        }
+                                                    }))
+                                                }
+                                                else {
+                                                    connection.next({
+                                                        id: call.id,
+                                                        type: "error",
+                                                        error: new Error("Trying to treat a promise as an observable.")
+                                                    })
+                                                }
+                                            }
+                                            else {
+                                                if (typeof input === "object" && input !== null && "subscribe" in input && input.subscribe !== undefined) {
+                                                    connection.next({
+                                                        id: call.id,
+                                                        type: "error",
+                                                        error: new Error("Trying to treat an observable as a promise.")
+                                                    })
+                                                }
+                                                else {
+                                                    const value = (async () => await input)()
+                                                    value.then(value => {
                                                         connection.next({
                                                             id: call.id,
-                                                            type: "next",
+                                                            type: "fulfilled",
                                                             value
                                                         })
-                                                    },
-                                                    error: error => {
+                                                    })
+                                                    value.catch(error => {
                                                         connection.next({
                                                             id: call.id,
                                                             type: "error",
                                                             error
                                                         })
-                                                    },
-                                                    complete: () => {
-                                                        connection.next({
-                                                            id: call.id,
-                                                            type: "complete"
-                                                        })
-                                                    }
-                                                }))
-                                            }
-                                            else {
-                                                const value = (async () => await input)()
-                                                value.then(value => {
-                                                    connection.next({
-                                                        id: call.id,
-                                                        type: "fulfilled",
-                                                        value
                                                     })
-                                                })
-                                                value.catch(error => {
-                                                    connection.next({
-                                                        id: call.id,
-                                                        type: "error",
-                                                        error
-                                                    })
-                                                })
+                                                }
                                             }
                                         }
                                         catch (error) {
