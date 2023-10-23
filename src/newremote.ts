@@ -127,7 +127,7 @@ export class ChannelWrapper implements Wrapper {
             share()
         )
         const promise = PLazy.from(async () => {
-            return firstValueFrom(this.current(this.config.autoRetryObservables ?? true).pipe(
+            return firstValueFrom(this.current(this.config.autoRetryPromises ?? true).pipe(
                 switchMap(connection => {
                     const id = generateId()
                     if (this.config.log) {
