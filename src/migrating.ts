@@ -1,11 +1,11 @@
 
 import { Observable, Subscription } from "rxjs"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
+import { ChannelReceiver } from "./channel-receiver"
+import { ChannelSender } from "./channel-sender"
 import { Coordinator } from "./coordinator"
-import { DirectReceiver } from "./direct"
-import { ChannelWrapper } from "./newremote"
-import { Target, proxy } from "./processing"
-import { Wrap } from "./wrap"
+import { Target } from "./processing"
+import { Remote } from "./wrap"
 
 interface ExposeMigratingConfig<T extends Target> {
 
@@ -21,7 +21,7 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
         if (action.action === "added") {
             //TODO make some kind of observable that keeps a registry maybe, to abstract this
             const target = callOrGet(config.target, action.id)
-            const receiver = new DirectReceiver({
+            const receiver = new ChannelReceiver({
                 channel: action.channel,
                 target: target,
                 log: config.log,
@@ -44,11 +44,6 @@ export interface WrapMigratingConfig {
 
 }
 
-export function wrapMigrating<T extends Target>(config: WrapMigratingConfig): Wrap<T> {
-    const sender = new ChannelWrapper({ log: config.log, autoRetryObservables: config.autoRetryObservables, autoRetryPromises: config.autoRetryPromises, channel: config.coordinator.frontEnd })
-    return {
-        remote: proxy<T>(sender),
-        connected: () => sender.connected(),
-        close: () => sender.close()
-    }
+export function wrapMigrating<T extends Target>(config: WrapMigratingConfig) {
+    return new Remote<T>(new ChannelSender({ log: config.log, autoRetryObservables: config.autoRetryObservables, autoRetryPromises: config.autoRetryPromises, channel: config.coordinator.frontEnd }))
 }

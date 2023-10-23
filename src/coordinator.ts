@@ -3,8 +3,6 @@ import { broadcastCoordinator } from "./broadcast-coordinator"
 import { Channel } from "./channel"
 import { Answer, Call } from "./processing"
 
-export const DEFAULT_CONTEXT = "default"
-
 export type CoordinationAction = {
     readonly action: "added"
     readonly id: string
@@ -20,7 +18,7 @@ export namespace Coordinator {
 
 }
 
-export type Coordinator = {
+export interface Coordinator {
 
     readonly backEnd: Observable<CoordinationAction>
     readonly frontEnd: Channel<Answer, Call>

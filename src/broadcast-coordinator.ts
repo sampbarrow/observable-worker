@@ -1,8 +1,10 @@
 import { EMPTY, defer, filter, first, map, merge, mergeMap, mergeWith, of, switchMap, tap } from "rxjs"
 import { Channel } from "./channel"
-import { Coordinator, DEFAULT_CONTEXT } from "./coordinator"
+import { Coordinator } from "./coordinator"
 import { Answer, Call } from "./processing"
 import { generateId, observeWebLock } from "./util"
+
+export const DEFAULT_CONTEXT = "default"
 
 export function broadcastCoordinator(context: string = DEFAULT_CONTEXT, log?: boolean): Coordinator {
     return {

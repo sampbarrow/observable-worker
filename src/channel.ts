@@ -1,11 +1,17 @@
-import { Observable, Observer, combineLatest, fromEvent, map, mergeMap, of, tap } from "rxjs"
+import { Observable, Observer, combineLatest, fromEvent, map, mergeMap, of } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { Batcher, BatcherOptions } from "./batcher"
 import { HasPostMessage, ObservableAndObserver, ObservableAndObserverConfig, closing } from "./util"
 
+/**
+ * A channel creates Connection objects.
+ */
 export interface Channel<I, O> extends Observable<Connection<I, O>> {
 }
 
+/**
+ * A connection sends and receives messages.
+ */
 export interface Connection<I, O> extends Observable<I>, Observer<O> {
 }
 
@@ -24,27 +30,18 @@ export namespace Channel {
     }
 
     /**
-     * Batches messages.
+     * Wraps another channel and batches any messages sent to it. Also treats incoming messages as batches.
      */
     export function batching<I, O>(channel: Channel<I[], O[]>, options?: BatcherOptions | undefined) {
         return channel.pipe(
             map(connection => {
-                if (options?.log) {
-                    console.log("TODO wrapping connection", connection)
-                }
                 const batcher = new Batcher<O>(values => {
-                    if (options?.log) {
-                        console.log("TODO batcher has ", values)
-                    }
                     connection.next(values)
                 }, options)
                 return from<I, O>({
-                    observable: connection.pipe(tap(_ => options?.log ? console.log("XX", _) : void 0), mergeMap(items => items)),
+                    observable: connection.pipe(mergeMap(items => items)),
                     observer: {
                         next: value => {
-                            if (options?.log) {
-                                console.log("TODO Sending value ", value)
-                            }
                             batcher.add(value)
                         },
                         error: connection.error.bind(connection),

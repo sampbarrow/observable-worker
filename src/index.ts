@@ -1,7 +1,7 @@
 
 export * from "./channel"
+export * from "./channel-receiver"
 export * from "./coordinator"
-export * from "./direct"
 export * from "./expose"
 export * from "./migrating"
 export * from "./processing"

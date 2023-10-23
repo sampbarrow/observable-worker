@@ -1,7 +1,7 @@
 import { ObservableInput } from "rxjs"
 import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
-import { DirectReceiver } from "./direct"
+import { ChannelReceiver } from "./channel-receiver"
 import { Answer, Call, Target } from "./processing"
 
 export interface ExposeSelfConfig<T extends Target> {
@@ -42,10 +42,9 @@ export interface ExposeConfig<T extends Target> {
 }
 
 export const expose = <T extends Target>(config: ExposeConfig<T>) => {
-    const receiver = new DirectReceiver({
+    return new ChannelReceiver({
         channel: config.channel,
         target: config.target,
         log: config.log,
-    })
-    return receiver.subscribe()
+    }).subscribe()
 }
