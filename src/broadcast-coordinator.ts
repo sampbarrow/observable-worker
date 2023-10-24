@@ -1,20 +1,79 @@
-import { EMPTY, defer, filter, first, map, merge, mergeMap, mergeWith, of, switchMap, tap } from "rxjs"
+import { EMPTY, filter, first, ignoreElements, map, merge, mergeMap, mergeWith, of, startWith, switchMap, tap } from "rxjs"
+import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
 import { Coordinator } from "./coordinator"
 import { Answer, Call } from "./processing"
 import { generateId, observeWebLock } from "./util"
 
 export const DEFAULT_CONTEXT = "default"
+export const DEFAULT_TIMEOUT = 5000
 
-export function broadcastCoordinator(context: string = DEFAULT_CONTEXT, log?: boolean): Coordinator {
+export interface BroadcastCoordinatorOptions {
+
+    readonly context?: string
+    //readonly timeout?: number
+
+}
+
+export function broadcastCoordinator(options: BroadcastCoordinatorOptions = {}): Coordinator {
     return {
-        frontEnd: findAndRegisterWithServer(context, log),
-        backEnd: observeWebLock(context).pipe(
-            switchMap(() => {
-                const registrationId = generateId()
-                const registration = Channel.broadcast<RegistrationMessage>(registrationId)
-                const lookup = lookupListen(context, registrationId).subscribe()//TODO work into the rxjs chain
-                return registration.pipe(
+        frontEnd: buildFrontEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2)),
+        backEnd: buildBackEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2))
+    }
+}
+
+export interface BroadcastCoordinatorBatchingOptions {
+
+    readonly context?: string
+    readonly batcher?: BatcherOptions
+    //readonly timeout?: number
+
+}
+
+export function broadcastCoordinatorBatching(options: BroadcastCoordinatorBatchingOptions = {}): Coordinator {
+    return {
+        frontEnd: buildFrontEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2), options.batcher)),
+        backEnd: buildBackEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2), options.batcher))
+    }
+}
+
+type BroadcastChannelCreator = <I, O>(id1: string, id2: string) => Channel<I, O>
+
+function buildFrontEnd(context: string, createBroadcastChannel: BroadcastChannelCreator) {
+    return frontEndLookup(context).pipe(
+        switchMap(channelId => {
+            return registerWithServer(channelId).pipe(
+                //TODO a better way to do this than undefined/volatilechannel?
+                switchMap(channelIds => {
+                    if (channelIds === undefined) {
+                        return of(undefined)
+                    }
+                    return createBroadcastChannel<Answer, Call>(channelIds.answerChannelId, channelIds.callChannelId)
+                })
+            )
+        }),
+        /*
+        startWith(undefined),
+        switchMap(channel => {
+
+        })
+        timeout({
+            first: 100,
+            with: () => {
+                return throwError(() => "Timeout when contacting migrating worker.")
+            }
+        }),*/
+    )
+}
+
+function buildBackEnd(context: string, createBroadcastChannel: BroadcastChannelCreator) {
+    return observeWebLock(context).pipe(
+        switchMap(() => {
+            const registrationId = generateId()
+            const registration = Channel.broadcast<RegistrationMessage>(registrationId, [{ type: "workerDied" }])
+            return merge(
+                backEndLookup(context, registrationId).pipe(ignoreElements()),
+                registration.pipe(
                     switchMap(connection => {
                         return connection.pipe(
                             mergeMap(message => {
@@ -23,75 +82,27 @@ export function broadcastCoordinator(context: string = DEFAULT_CONTEXT, log?: bo
                                         type: "clientRegistered",
                                         clientId: message.clientId
                                     })
-                                    if (log) {
-                                        console.log("[Worker/Migrating] Received a registration request from client " + message.clientId + ".")
-                                    }
-                                    return merge(
-                                        of({
-                                            action: "added" as const,
-                                            id: message.clientId,
-                                            channel: Channel.batching<Call, Answer>(Channel.dualBroadcast(message.callChannelId, message.answerChannelId), { log })
+                                    return observeWebLock(message.lockId).pipe(
+                                        map(() => {
+                                            return {
+                                                action: "delete" as const,
+                                                clientId: message.clientId,
+                                            }
                                         }),
-                                        observeWebLock(message.lockId).pipe(
-                                            map(() => {
-                                                return {
-                                                    action: "removed" as const,
-                                                    id: message.clientId,
-                                                }
-                                            })
-                                        )
+                                        startWith({
+                                            action: "add" as const,
+                                            clientId: message.clientId,
+                                            channel: createBroadcastChannel<Call, Answer>(message.callChannelId, message.answerChannelId)
+                                        })
                                     )
                                 }
                                 else {
                                     return EMPTY
                                 }
-                            })
+                            }),
                         )
                     })
                 )
-            })
-        )
-    }
-}
-
-type LookupMessage = {
-    readonly type: "askIfServerIsAvailable"
-} | {
-    readonly type: "newServerStarted"
-    readonly channelId: string
-} | {
-    readonly type: "serverIsAvailable"
-    readonly channelId: string
-}
-
-function lookupListen(context: string, registrationChannelId: string, log?: boolean) {
-    const lookup = Channel.broadcast<LookupMessage>(context)
-    return lookup.pipe(
-        switchMap(lookup => {
-            if (log) {
-                console.log("[Worker/Migrating] Sending a server started message on the lookup channel.", { context })
-            }
-            return merge(
-                of({
-                    type: "newServerStarted" as const,
-                    channelId: registrationChannelId
-                }),
-                lookup.pipe(
-                    filter(message => message.type === "askIfServerIsAvailable"),
-                    map(() => {
-                        if (log) {
-                            console.log("[Worker/Migrating] Received a server availability check on the lookup channel.", { context })
-                        }
-                        return {
-                            type: "serverIsAvailable" as const,
-                            channelId: registrationChannelId
-                        }
-                    })
-                )
-            ).pipe(
-                tap(response => {
-                    lookup.next(response)
-                })
             )
         })
     )
@@ -106,26 +117,43 @@ type RegistrationMessage = {
 } | {
     readonly type: "clientRegistered"
     readonly clientId: string
+} | {
+    readonly type: "workerDied"
 }
 
-function registerWithServer(channelId: string, log?: boolean) {
-    return defer(() => {
-        if (log) {
-            console.log("[Worker/Migration] Registering with server over registration channel " + channelId + ".")
-        }
-        const lockId = generateId()
-        return observeWebLock(lockId).pipe(
-            mergeMap(() => {
-                const registration = Channel.broadcast<RegistrationMessage>(channelId)
-                return registration.pipe(
-                    mergeMap(registration => {
-                        const clientId = generateId()
-                        if (log) {
-                            console.log("[Worker/Migration] Registering client " + clientId + " on registration channel " + channelId + ".")
-                        }
-                        const callChannelId = generateId()
-                        const answerChannelId = generateId()
-                        const registered = registration.pipe(
+function registerWithServer(channelId: string) {
+    const lockId = generateId()
+    return observeWebLock(lockId).pipe(
+        switchMap(() => {
+            const registration = Channel.broadcast<RegistrationMessage>(channelId)
+            return registration.pipe(
+                mergeMap(registration => {
+                    const clientId = generateId()
+                    const callChannelId = generateId()
+                    const answerChannelId = generateId()
+                    //TODO try to ensure proper priorities or just rely on locks?
+                    registration.next({
+                        type: "registerClient",
+                        clientId,
+                        lockId,
+                        callChannelId,
+                        answerChannelId,
+                    })
+                    return merge(
+                        registration.pipe(
+                            filter(message => message.type === "workerDied"),
+                            first(),
+                            map(() => undefined),
+                            /*
+                            mergeMap(() => {
+                                return timer(maximumWait).pipe(
+                                    mergeMap(() => {
+                                        return throwError(() => new RemoteError("timeout", "Previous worker died, no new migrating worker was found within the timeout (" + maximumWait + "ms)."))
+                                    })
+                                )
+                            }),*/
+                        ),
+                        registration.pipe(
                             filter(message => message.type === "clientRegistered" && message.clientId === clientId),
                             first(),
                             map(() => {
@@ -133,77 +161,86 @@ function registerWithServer(channelId: string, log?: boolean) {
                                     callChannelId,
                                     answerChannelId
                                 }
-                            })
+                            }),
                         )
-                        //TODO try to ensure proper priorities or just rely on locks?
-                        registration.next({
-                            type: "registerClient",
-                            clientId,
-                            lockId,
-                            callChannelId,
-                            answerChannelId,
-                        })
-                        return registered
-                    })
-                )
-            })
-        )
-    })
-}
-
-function findAndRegisterWithServer(context: string = DEFAULT_CONTEXT, log?: boolean) {
-    return findServer(context, log).pipe(
-        switchMap(channelId => {
-            return registerWithServer(channelId, log)
-        }),
-        switchMap(channelIds => {
-            const calls = Channel.batching(Channel.broadcast<Call[]>(channelIds.callChannelId), { log })
-            const answers = Channel.batching(Channel.broadcast<Answer[]>(channelIds.answerChannelId), { log })
-            return Channel.combine(answers, calls)
+                    )
+                })
+            )
         })
     )
 }
 
-function findServer(context: string = DEFAULT_CONTEXT, log?: boolean) {
-    return defer(() => {
-        //TODO close
-        const lookup = Channel.broadcast<LookupMessage>(context)
-        if (log) {
-            console.log("[Worker/Migrating] Asking if a server is available.", { context })
-        }
-        return lookup.pipe(
-            switchMap(lookup => {
-                lookup.next({
-                    type: "askIfServerIsAvailable"
-                })
-                return lookup.pipe(
+/**
+ * Lookup
+ */
+
+type AskIfServerIsAvailableLookupMessage = {
+    readonly type: "askIfServerIsAvailable"
+}
+type NewServerStartedLookupMessage = {
+    readonly type: "newServerStarted"
+    readonly channelId: string
+}
+type ServerIsAvailableLookupMessage = {
+    readonly type: "serverIsAvailable"
+    readonly channelId: string
+}
+type LookupMessage = AskIfServerIsAvailableLookupMessage | NewServerStartedLookupMessage | ServerIsAvailableLookupMessage
+
+function backEndLookup(context: string, registrationChannelId: string) {
+    return Channel.broadcast<LookupMessage>(context).pipe(
+        switchMap(connection => {
+            return connection.pipe(
+                filter(message => message.type === "askIfServerIsAvailable"),
+                map(() => {
+                    return {
+                        type: "serverIsAvailable" as const,
+                        channelId: registrationChannelId
+                    }
+                }),
+                startWith({
+                    type: "newServerStarted" as const,
+                    channelId: registrationChannelId
+                }),
+                tap(connection)
+            )
+        })
+    )
+}
+
+function frontEndLookup(context: string = DEFAULT_CONTEXT) {
+    return Channel.broadcast<LookupMessage>(context).pipe(
+        tap(lookup => {
+            lookup.next({
+                type: "askIfServerIsAvailable"
+            })
+        }),
+        switchMap(lookup => {
+            return lookup.pipe(
+                mergeMap(message => {
+                    if (message.type === "newServerStarted" || message.type === "serverIsAvailable") {
+                        return of(message.channelId)
+                    }
+                    return EMPTY
+                }),
+                first(),
+                mergeWith(lookup.pipe(
                     mergeMap(message => {
-                        if (message.type === "newServerStarted" || message.type === "serverIsAvailable") {
-                            if (log) {
-                                console.log("[Worker/Migrating] Got first message from lookup channel.", { context, message })
-                            }
+                        if (message.type === "newServerStarted") {
                             return of(message.channelId)
                         }
-                        else {
-                            return EMPTY
-                        }
-                    }),
-                    first(),
-                    mergeWith(lookup.pipe(
-                        mergeMap(message => {
-                            if (message.type === "newServerStarted") {
-                                if (log) {
-                                    console.log("[Worker/Migrating] A new server has started.", { context, message })
-                                }
-                                return of(message.channelId)
-                            }
-                            else {
-                                return EMPTY
-                            }
-                        })
-                    ))
-                )
-            })
-        )
-    })
+                        return EMPTY
+                    })
+                )),
+                /*
+                timeout({
+                    first: maximumWait,
+                    with: () => {
+                        return of(undefined)
+                        //return throwError(() => new RemoteError("timeout", "No migrating worker was found within the timeout (" + maximumWait + "ms)."))
+                    }
+                })*/
+            )
+        })
+    )
 }

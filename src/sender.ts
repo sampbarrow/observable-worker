@@ -1,5 +1,4 @@
 import { Observable } from "rxjs"
-import { Proxied, Target } from "./processing"
 import { ObservableAndPromise } from "./util"
 
 /**
@@ -22,7 +21,7 @@ export interface Sender {
     /**
      * An observable that notifies when this sender is connected or reconnected to a new worker.
      */
-    withOptions(options: SenderOptions): Sender
+    withOptions(options: RetryOptions): Sender
 
     /**
      * Close this sender and disconnect from the remote.
@@ -31,7 +30,7 @@ export interface Sender {
 
 }
 
-export interface SenderOptions {
+export interface RetryOptions {
 
     /**
      * Automatically retry promise calls if the worker disappears.
@@ -43,18 +42,9 @@ export interface SenderOptions {
      */
     readonly autoRetryObservables?: boolean | undefined
 
-}
+    /**
+     * Timeout for promises.
+     */
+    readonly promiseTimeout?: number | undefined
 
-/**
- * Proxy a wrapper as an object type.
- * @param sender Sender.
- * @returns A proxy object.
- */
-export function proxy<T extends Target>(sender: Sender) {
-    const proxy = new Proxy(sender, {
-        get(target, key) {
-            return (...args: unknown[]) => target.call(key as any, ...args as any)
-        }
-    })
-    return proxy as Proxied<T>
 }

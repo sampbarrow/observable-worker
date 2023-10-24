@@ -1,49 +1,53 @@
 
-import { Observable, Subscription } from "rxjs"
+import { Observable, map } from "rxjs"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { ChannelReceiver } from "./channel-receiver"
-import { ChannelSender } from "./channel-sender"
 import { Coordinator } from "./coordinator"
 import { Target } from "./processing"
-import { Remote } from "./wrap"
+import { RetryOptions } from "./sender"
+import { registry } from "./util"
+import { wrap } from "./wrap"
 
 interface ExposeMigratingConfig<T extends Target> {
 
     readonly coordinator: Coordinator
-    readonly log?: boolean
     readonly target: ValueOrFactory<Observable<T>, [unknown]>
 
 }
 
 export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<T>) {
-    const clients = new Map<string, Subscription>()
-    return config.coordinator.backEnd.subscribe(action => {
-        if (action.action === "added") {
-            //TODO make some kind of observable that keeps a registry maybe, to abstract this
-            const target = callOrGet(config.target, action.id)
-            const receiver = new ChannelReceiver({
-                channel: action.channel,
-                target: target,
-                log: config.log,
-            })
-            clients.set(action.id, receiver.subscribe())
-        }
-        else {
-            clients.get(action.id)?.unsubscribe()
-            clients.delete(action.id)
-        }
-    })
+    return registry(config.coordinator.backEnd.pipe(
+        map(action => {
+            if (action.action === "add") {
+                return {
+                    action: "add",
+                    key: action.clientId,
+                    observable: new ChannelReceiver({
+                        channel: action.channel,
+                        target: callOrGet(config.target, action.clientId)
+                    })
+                }
+            }
+            else {
+                return {
+                    action: "delete",
+                    key: action.clientId,
+                }
+            }
+        }),
+    )).subscribe()
 }
 
-export interface WrapMigratingConfig {
+export interface WrapMigratingConfig extends RetryOptions {
 
     readonly coordinator: Coordinator
-    readonly log?: boolean
-    readonly autoRetryPromises?: boolean | undefined
-    readonly autoRetryObservables?: boolean | undefined
 
 }
 
 export function wrapMigrating<T extends Target>(config: WrapMigratingConfig) {
-    return new Remote<T>(new ChannelSender({ log: config.log, autoRetryObservables: config.autoRetryObservables, autoRetryPromises: config.autoRetryPromises, channel: config.coordinator.frontEnd }))
+    return wrap<T>({
+        channel: config.coordinator.frontEnd,
+        autoRetryObservables: config.autoRetryObservables,
+        autoRetryPromises: config.autoRetryPromises
+    })
 }

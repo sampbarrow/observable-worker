@@ -1,12 +1,15 @@
-import { Observable, Observer, combineLatest, fromEvent, map, mergeMap, of } from "rxjs"
+import { Observable, ObservableInput, Observer, combineLatest, first, from, fromEvent, map, merge, mergeMap, of, skip, startWith, switchMap, throwError, timer } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { Batcher, BatcherOptions } from "./batcher"
-import { HasPostMessage, ObservableAndObserver, ObservableAndObserverConfig, closing } from "./util"
+import { HasPostMessage, ObservableAndObserver, ObservableAndObserverConfig, RemoteError, closing } from "./util"
 
 /**
  * A channel creates Connection objects.
  */
 export interface Channel<I, O> extends Observable<Connection<I, O>> {
+}
+
+export interface VolatileChannel<I, O> extends Observable<Connection<I, O> | undefined> {
 }
 
 /**
@@ -29,21 +32,34 @@ export namespace Channel {
         return port<I, O>(of(globalThis))
     }
 
+    export function unbatching<I, O>(channel: Channel<I[], O[]>) {
+        return channel.pipe(
+            map(connection => {
+                return build<I, O>({
+                    observable: connection.pipe(mergeMap(items => items)),
+                    observer: {
+                        next: value => {
+                            connection.next([value])
+                        },
+                        error: connection.error.bind(connection),
+                        complete: connection.complete.bind(connection),
+                    },
+                })
+            })
+        )
+    }
+
     /**
      * Wraps another channel and batches any messages sent to it. Also treats incoming messages as batches.
      */
     export function batching<I, O>(channel: Channel<I[], O[]>, options?: BatcherOptions | undefined) {
         return channel.pipe(
             map(connection => {
-                const batcher = new Batcher<O>(values => {
-                    connection.next(values)
-                }, options)
-                return from<I, O>({
+                const batcher = new Batcher<O>(connection.next.bind(connection), options)
+                return build<I, O>({
                     observable: connection.pipe(mergeMap(items => items)),
                     observer: {
-                        next: value => {
-                            batcher.add(value)
-                        },
+                        next: batcher.add.bind(batcher),
                         error: connection.error.bind(connection),
                         complete: connection.complete.bind(connection),
                     },
@@ -55,8 +71,18 @@ export namespace Channel {
     /**
      * Creates a channel from a broadcast channel.
      */
-    export function broadcast<T>(input: string): Channel<T, T> {
-        return port(closing(() => new BroadcastChannel(input), channel => channel.close()))
+    export function broadcast<T>(name: string, onClose?: ObservableInput<T>): Channel<T, T> {
+        return port(closing(() => new BroadcastChannel(name), channel => {
+            if (onClose === undefined) {
+                channel.close()
+            }
+            else {
+                from(onClose).subscribe({
+                    next: value => channel.postMessage(value),
+                    complete: () => channel.close()
+                })
+            }
+        }))
     }
 
     /**
@@ -84,7 +110,7 @@ export namespace Channel {
     export function port<I = never, O = unknown>(open: Observable<Port<I, O>>): Channel<I, O> {
         return new Observable<Connection<I, O>>(subscriber => {
             const subscription = open.subscribe(object => {
-                subscriber.next(from({
+                subscriber.next(build({
                     observable: fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
                     observer: {
                         next: (value: O) => {
@@ -123,8 +149,40 @@ export namespace Channel {
     /**
      * Combine and observable and observer into a channel.
      */
-    export function from<I, O>(config: ObservableAndObserverConfig<I, O>): Connection<I, O> {
+    export function build<I, O>(config: ObservableAndObserverConfig<I, O>): Connection<I, O> {
         return new ObservableAndObserver(config)
+    }
+
+    export function volatile<I, O>(channel: Observable<Connection<I, O> | undefined>, retryOnInterrupt: boolean, connectionTimeout: number) {
+        return merge(
+            channel.pipe(first()),
+            channel.pipe(
+                skip(1),
+                map(sender => {
+                    if (retryOnInterrupt) {
+                        return sender
+                    }
+                    else {
+                        throw new RemoteError("worker-disappeared", "The worker disappeared. Please try again.")
+                    }
+                })
+            )
+        ).pipe(
+            startWith(undefined),
+            //TODO timeout if we never get the first channel
+            switchMap(connection => {
+                if (connection === undefined) {
+                    //TODO timeout var
+                    //TODO ifretryoninterrupt?
+                    return timer(connectionTimeout).pipe(
+                        mergeMap(() => {
+                            return throwError(() => new RemoteError("timeout", "Could not establish a connection within the timeout of " + connectionTimeout.toLocaleString() + "ms."))
+                        })
+                    )
+                }
+                return of(connection)
+            })
+        )
     }
 
 }

@@ -1,29 +1,8 @@
 import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
-import { ChannelSender } from "./channel-sender"
+import { ChannelSender, ChannelSenderOptions } from "./channel-sender"
 import { Answer, Call, Target } from "./processing"
-import { Sender, SenderOptions, proxy } from "./sender"
-
-//TODO redundant? maybe just merge into the channelwrapper or whatever
-export class Remote<T extends Target> {
-
-    readonly remote
-
-    constructor(private readonly sender: Sender) {
-        this.remote = proxy<T>(sender)
-    }
-
-    connected() {
-        return this.sender.connected()
-    }
-    close() {
-        return this.sender.close()
-    }
-    withOptions(options: SenderOptions) {
-        return new Remote(this.sender.withOptions(options))
-    }
-
-}
+import { MockRemote, Remote, SenderRemote } from "./remote"
 
 /*
 export class MockRemote {
@@ -41,29 +20,35 @@ export class MockRemote {
 */
 
 export function wrapWorker<T extends Target>(url: string | URL, options?: WorkerOptions | undefined) {
-    return wrap<T>(Channel.worker(url, options))
+    return wrap<T>({
+        channel: Channel.worker(url, options)
+    })
 }
 export function wrapWorkerBatching<T extends Target>(url: string | URL, options?: WorkerOptions | undefined, batcherOptions?: BatcherOptions | undefined) {
-    return wrap<T>(Channel.batching(Channel.worker(url, options), batcherOptions))
+    return wrap<T>({
+        channel: Channel.batching(Channel.worker(url, options), batcherOptions)
+    })
 }
 
 export interface WrapBatchingOptions extends BatcherOptions {
 
     readonly channel: Channel<Answer[], Call[]>
-    readonly log?: boolean | undefined
 
 }
 
 export function wrapBatching<T extends Target>(options: WrapBatchingOptions) {
-    return wrap<T>(Channel.batching(options.channel, { log: options.log, debounceTime: options.debounceTime }), { log: options.log })
+    return wrap<T>({
+        channel: Channel.batching(options.channel, { debounceTime: options.debounceTime })
+    })
 }
 
-export interface WrapOptions {
-
-    readonly log?: boolean | undefined
-
+export interface WrapOptions extends ChannelSenderOptions {
 }
 
-export function wrap<T extends Target>(channel: Channel<Answer, Call>, options?: WrapOptions): Remote<T> {
-    return new Remote<T>(new ChannelSender({ ...options, channel }))
+export function wrap<T extends Target>(options: WrapOptions): Remote<T> {
+    return new SenderRemote<T>(new ChannelSender(options))
+}
+
+export function wrapMock<T extends Target>(object: T): Remote<T> {
+    return new MockRemote(object)
 }

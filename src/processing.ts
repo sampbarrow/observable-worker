@@ -1,5 +1,5 @@
 
-import { Observable } from "rxjs"
+import { Observable, ObservableNotification } from "rxjs"
 
 export type Target = object
 export type ID = string | number | symbol
@@ -20,37 +20,26 @@ export type Proxied<T extends Target> = {
 
 }
 
-export type Call = {
-    readonly type: "execute"
+export type ExecuteCall = {
+    readonly kind: "X"
     readonly id: ID
     readonly command: string | number | symbol
     readonly data: readonly unknown[]
-} | {
-    readonly type: "subscribe"
+}
+export type SubscribeCall = {
+    readonly kind: "S"
     readonly id: ID
     readonly command: string | number | symbol
     readonly data: readonly unknown[]
-} | {
-    readonly type: "unsubscribe"
+}
+export type UnsubscribeCall = {
+    readonly kind: "U"
     readonly id: ID
 }
 
-export type Answer = {
-    readonly type: "fulfilled"
-    readonly id: ID
-    readonly value: unknown
-} | {
-    readonly type: "next"
-    readonly id: ID
-    readonly value: unknown
-} | {
-    readonly type: "error"
-    readonly id: ID
-    readonly error: unknown
-} | {
-    readonly id: ID
-    readonly type: "complete"
-}
+export type Call = ExecuteCall | SubscribeCall | UnsubscribeCall
+
+export type Answer = ObservableNotification<unknown> & { id: ID }
 
 /**
  * The backend object that receives calls and sends back answers. It's an observable, so to start running it, just subscribe to it.

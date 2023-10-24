@@ -1,26 +1,27 @@
 import { Observable } from "rxjs"
-import { broadcastCoordinator } from "./broadcast-coordinator"
-import { Channel } from "./channel"
+import { broadcastCoordinator, broadcastCoordinatorBatching } from "./broadcast-coordinator"
+import { Channel, VolatileChannel } from "./channel"
 import { Answer, Call } from "./processing"
 
 export type CoordinationAction = {
-    readonly action: "added"
-    readonly id: string
+    readonly action: "add"
+    readonly clientId: string
     readonly channel: Channel<Call, Answer>
 } | {
-    readonly action: "removed"
-    readonly id: string
+    readonly action: "delete"
+    readonly clientId: string
 }
 
 export namespace Coordinator {
 
     export const broadcast = broadcastCoordinator
+    export const broadcastBatching = broadcastCoordinatorBatching
 
 }
 
 export interface Coordinator {
 
     readonly backEnd: Observable<CoordinationAction>
-    readonly frontEnd: Channel<Answer, Call>
+    readonly frontEnd: VolatileChannel<Answer, Call>
 
 }

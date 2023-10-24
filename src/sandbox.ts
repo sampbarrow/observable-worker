@@ -30,7 +30,7 @@ export function startAndStopSender<I, O>(condition: Observable<boolean>, channel
                             filter(_ => _.type === "started"),
                             map(() => {
                                 console.log("returning a new channel")
-                                return Channel.from<I, O>({
+                                return Channel.build<I, O>({
                                     observable: connection.pipe(mergeMap(_ => _.type === "value" ? of(_.value) : EMPTY)),
                                     observer: {
                                         next: value => {
@@ -63,7 +63,7 @@ export function startAndStopChannel<I, O>(channel: Channel<ExclusiveMessage<I>, 
                         connection.next({
                             type: "started"
                         })
-                        return of(Channel.from<I, O>({
+                        return of(Channel.build<I, O>({
                             observable: commands.pipe(mergeMap(_ => _.type === "value" ? of(_.value) : EMPTY)),
                             observer: {
                                 next: value => {
