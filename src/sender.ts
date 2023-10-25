@@ -21,7 +21,7 @@ export interface Sender {
     /**
      * An observable that notifies when this sender is connected or reconnected to a new worker.
      */
-    withOptions(options: RetryOptions): Sender
+    withOptions(options: CallOptions): Sender
 
     /**
      * Close this sender and disconnect from the remote.
@@ -30,7 +30,7 @@ export interface Sender {
 
 }
 
-export interface RetryOptions {
+export interface CallOptions {
 
     /**
      * Automatically retry promise calls if the worker disappears.
@@ -46,5 +46,10 @@ export interface RetryOptions {
      * Timeout for promises.
      */
     readonly promiseTimeout?: number | undefined
+
+    /**
+     * Timeout for promises.
+     */
+    readonly observableTimeout?: number | undefined
 
 }

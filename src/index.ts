@@ -5,6 +5,7 @@ export * from "./coordinator"
 export * from "./expose"
 export * from "./migrating"
 export * from "./processing"
+export * from "./remote"
 export * from "./util"
 export * from "./wrap"
 

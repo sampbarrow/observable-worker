@@ -1,3 +1,4 @@
+import { ObservableNotification } from "rxjs"
 import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
 import { ChannelSender, ChannelSenderOptions } from "./channel-sender"
@@ -32,7 +33,7 @@ export function wrapWorkerBatching<T extends Target>(url: string | URL, options?
 
 export interface WrapBatchingOptions extends BatcherOptions {
 
-    readonly channel: Channel<Answer[], Call[]>
+    readonly channel: Channel<ObservableNotification<Answer>[], Call[]>
 
 }
 

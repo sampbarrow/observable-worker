@@ -1,9 +1,11 @@
 
 import { customAlphabet } from "nanoid"
 import pDefer from "p-defer"
-import { EMPTY, Observable, Observer, Subscription, map, mergeMap, throwError } from "rxjs"
+import { EMPTY, Observable, Observer, Subscription, defer, first, map, mergeMap } from "rxjs"
 import { Connection } from "./channel"
 import { Allowed, Target } from "./processing"
+
+export type Next<O> = Pick<Observer<O>, "next"> | Observer<O>["next"]
 
 /**
  * Config for utility class for combining and observable and observer.
@@ -11,30 +13,30 @@ import { Allowed, Target } from "./processing"
 export type ObservableAndObserverConfig<I, O> = {
 
     readonly observable: Observable<I>
-    readonly observer: Observer<O>
+    readonly observer: Pick<Observer<O>, "next"> | Observer<O>["next"]
 
 }
+
+
 
 /**
  * Utility class for combining and observable and observer.
  */
 export class ObservableAndObserver<I, O> extends Observable<I> implements Connection<I, O> {
 
-    constructor(private readonly config: ObservableAndObserverConfig<I, O>) {
+    constructor(observable: Observable<I>, private readonly observer: Next<O>) {
         super(subscriber => {
-            return config.observable.subscribe(subscriber)
+            return observable.subscribe(subscriber)
         })
     }
 
-    complete() {
-        return this.config.observer.complete()
-    }
     next(value: O) {
-        console.log("TODO", value)
-        return this.config.observer.next(value)
-    }
-    error(error: unknown) {
-        return this.config.observer.error(error)
+        if (typeof this.observer === "function") {
+            return this.observer(value)
+        }
+        else {
+            return this.observer.next(value)
+        }
     }
 
 }
@@ -78,9 +80,23 @@ export async function acquireWebLock(name: string, options?: LockOptions) {
 }
 
 /**
+ * A hack function to acquire a randomly named web lock as an observable. Releases when unsubscribed.
+ */
+export function randomLock(tag: string = "") {
+    return defer(() => {
+        const lockId = tag + generateId()
+        return holdWebLock(lockId).pipe(map(() => lockId))
+    })
+}
+
+export function onWebLockAvailable(name: string) {
+    return holdWebLock(name, { mode: "shared" }).pipe(first())
+}
+
+/**
  * A hack function to acquire a web lock as an observable. Releases when unsubscribed.
  */
-export function observeWebLock(name: string, options?: Omit<LockOptions, "signal">) {
+export function holdWebLock(name: string, options?: Omit<LockOptions, "signal">) {
     return new Observable<void>(subscriber => {
         const controller = new AbortController()
         const lock = acquireWebLock(name, { ...options, signal: controller.signal })
@@ -91,6 +107,7 @@ export function observeWebLock(name: string, options?: Omit<LockOptions, "signal
             subscriber.error(error)
         })
         return () => {
+            console.log("TODO aborting lock", name)
             controller.abort()
             lock.then(release => release())
         }
@@ -140,11 +157,13 @@ export type RegistryAction<K, V> = {
 } | {
     readonly action: "delete"
     readonly key: K
+} | {
+    readonly action: "clear"
 }
 
 export interface RegistryOptions {
 
-    allowIncorrectIds?: boolean | undefined
+    // readonly allowMultipleUnsubscribes?: boolean | undefined
 
 }
 
@@ -177,13 +196,19 @@ export function registry<K, V>(observable: Observable<RegistryAction<K, V>>, opt
                     }
                 })
             }
+            else if (action.action === "clear") {
+                observables.forEach(subscription => {
+                    subscription.unsubscribe()
+                })
+                return EMPTY
+            }
             else {
                 const observable = observables.get(action.key)
-                if (!options.allowIncorrectIds) {
-                    if (observable === undefined) {
-                        return throwError(() => new Error("Tried to remove a non existent observable from a registry."))
-                    }
-                }
+                // if (!options.allowMultipleUnsubscribes) {
+                //if (observable === undefined) {
+                //return throwError(() => new Error("Tried to remove a non existent observable from a registry."))
+                //}
+                //}
                 observable?.unsubscribe()
                 return EMPTY
             }

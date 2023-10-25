@@ -1,4 +1,4 @@
-import { Observable, ObservableInput, combineLatest, defer, from, map, materialize, switchMap, throwError } from "rxjs"
+import { Observable, ObservableInput, ObservableNotification, combineLatest, defer, from, map, materialize, switchMap, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Answer, Call, Receiver, Target } from "./processing"
 import { RemoteError, callOnTarget, registryWith } from "./util"
@@ -6,7 +6,7 @@ import { RemoteError, callOnTarget, registryWith } from "./util"
 export interface ChannelReceiverConfig<T> {
 
     readonly target: ObservableInput<T>
-    readonly channel: Channel<Call, Answer>
+    readonly channel: Channel<Call, ObservableNotification<Answer>>
 
 }
 
@@ -61,12 +61,15 @@ export class ChannelReceiver<T extends Target> extends Observable<void> implemen
                             }
                         }),
                         registryWith(),
-                        //TODO "tap" might not be a good way to do this
                         map(([id, answer]) => {
-                            connection.next({
+                            return {
                                 id,
                                 ...answer,
-                            })
+                            }
+                        }),
+                        materialize(),
+                        map(value => {
+                            connection.next(value)
                         })
                     )
                 })

@@ -1,6 +1,6 @@
 import { Observable, of } from "rxjs"
 import { Proxied, Target } from "./processing"
-import { RetryOptions, Sender } from "./sender"
+import { CallOptions, Sender } from "./sender"
 import { callOnTarget, proxy } from "./util"
 
 export interface Remote<T extends Target> {
@@ -9,7 +9,7 @@ export interface Remote<T extends Target> {
 
     connected(): Observable<void>
     close(): void
-    withOptions(options: RetryOptions): Remote<T>
+    withOptions(options: CallOptions): Remote<T>
 
 }
 
@@ -34,7 +34,7 @@ export class SenderRemote<T extends Target> implements Remote<T> {
     close() {
         return this.sender.close()
     }
-    withOptions(options: RetryOptions) {
+    withOptions(options: CallOptions) {
         return new SenderRemote<T>(this.sender.withOptions(options))
     }
 

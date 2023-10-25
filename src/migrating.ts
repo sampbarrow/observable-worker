@@ -4,7 +4,7 @@ import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { ChannelReceiver } from "./channel-receiver"
 import { Coordinator } from "./coordinator"
 import { Target } from "./processing"
-import { RetryOptions } from "./sender"
+import { CallOptions } from "./sender"
 import { registry } from "./util"
 import { wrap } from "./wrap"
 
@@ -20,25 +20,19 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
         map(action => {
             if (action.action === "add") {
                 return {
-                    action: "add",
-                    key: action.clientId,
+                    ...action,
                     observable: new ChannelReceiver({
-                        channel: action.channel,
-                        target: callOrGet(config.target, action.clientId)
+                        channel: action.observable,
+                        target: callOrGet(config.target, action.key)
                     })
                 }
             }
-            else {
-                return {
-                    action: "delete",
-                    key: action.clientId,
-                }
-            }
+            return action
         }),
     )).subscribe()
 }
 
-export interface WrapMigratingConfig extends RetryOptions {
+export interface WrapMigratingConfig extends CallOptions {
 
     readonly coordinator: Coordinator
 
