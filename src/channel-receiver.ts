@@ -1,4 +1,4 @@
-import { Observable, ObservableInput, ObservableNotification, combineLatest, defer, from, map, materialize, switchMap, throwError } from "rxjs"
+import { Observable, ObservableInput, ObservableNotification, catchError, combineLatest, defer, from, map, materialize, switchMap, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Answer, Call, Receiver, Target } from "./processing"
 import { RemoteError, callOnTarget, registryWith } from "./util"
@@ -29,34 +29,34 @@ export class ChannelReceiver<T extends Target> extends Observable<void> implemen
                                 }
                             }
                             else {
-                                const observable = (() => {
-                                    try {
-                                        const input = callOnTarget(target, call.command, call.data)
-                                        if (call.kind === "S") {
-                                            if (input.observable === undefined) {
-                                                throw new RemoteError("invalid-message", "Trying to treat a promise as an observable.")
-                                            }
-                                            else {
-                                                return input.observable.pipe(materialize())
-                                            }
+                                const observable = defer(() => {
+                                    const input = callOnTarget(target, call.command, call.data)
+                                    if (call.kind === "S") {
+                                        if (input.observable === undefined) {
+                                            throw new RemoteError("invalid-message", "Trying to treat a promise as an observable.")
                                         }
                                         else {
-                                            if (input.promise === undefined) {
-                                                throw new RemoteError("invalid-message", "Trying to treat an observable as a promise.")
-                                            }
-                                            else {
-                                                return defer(input.promise).pipe(materialize())
-                                            }
+                                            return input.observable
                                         }
                                     }
-                                    catch (error) {
-                                        return throwError(() => error).pipe(materialize())
+                                    else {
+                                        if (input.promise === undefined) {
+                                            throw new RemoteError("invalid-message", "Trying to treat an observable as a promise.")
+                                        }
+                                        else {
+                                            return defer(input.promise)
+                                        }
                                     }
-                                })()
+                                })
                                 return {
                                     action: "add" as const,
                                     key: call.id,
-                                    observable
+                                    observable: observable.pipe(
+                                        catchError(error => {
+                                            return throwError(() => new RemoteError("call-failed", "Remote call to \"" + call.command + "\" failed.", { cause: error }))
+                                        }),
+                                        materialize()
+                                    )
                                 }
                             }
                         }),

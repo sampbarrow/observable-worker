@@ -1,7 +1,6 @@
 import { EMPTY, ObservableNotification, combineLatest, filter, first, ignoreElements, map, merge, mergeMap, of, startWith, switchMap, tap } from "rxjs"
 import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
-import { Coordinator } from "./coordinator"
 import { Answer, Call } from "./processing"
 import { generateId, holdWebLock, onWebLockAvailable, randomLock } from "./util"
 
@@ -13,11 +12,11 @@ export interface BroadcastCoordinatorOptions {
 
 }
 
-export function broadcastCoordinator(options: BroadcastCoordinatorOptions = {}): Coordinator {
-    return {
-        frontEnd: buildFrontEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2)),
-        backEnd: buildBackEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2))
-    }
+export function broadcastFinder(options: BroadcastCoordinatorOptions = {}) {
+    return buildBroadcastFinder(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2))
+}
+export function broadcastAdvertiser(options: BroadcastCoordinatorOptions = {}) {
+    return buildBroadcastAdvertiser(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.dualBroadcast(id1, id2))
 }
 
 export interface BroadcastCoordinatorBatchingOptions {
@@ -27,16 +26,16 @@ export interface BroadcastCoordinatorBatchingOptions {
 
 }
 
-export function broadcastCoordinatorBatching(options: BroadcastCoordinatorBatchingOptions = {}): Coordinator {
-    return {
-        frontEnd: buildFrontEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2), options.batcher)),
-        backEnd: buildBackEnd(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2), options.batcher))
-    }
+export function broadcastFinderBatching(options: BroadcastCoordinatorOptions = {}) {
+    return buildBroadcastFinder(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2)))
+}
+export function broadcastAdvertiserBatching(options: BroadcastCoordinatorOptions = {}) {
+    return buildBroadcastAdvertiser(options.context ?? DEFAULT_CONTEXT, (id1, id2) => Channel.batching(Channel.dualBroadcast(id1, id2)))
 }
 
 type BroadcastChannelCreator = <I, O>(id1: string, id2: string) => Channel<I, O>
 
-function buildBackEnd(context: string, createBroadcastChannel: BroadcastChannelCreator) {
+function buildBroadcastAdvertiser(context: string, createBroadcastChannel: BroadcastChannelCreator) {
     return holdWebLock(context).pipe(
         switchMap(() => {
             const registrationChannelId = generateId()
@@ -97,7 +96,7 @@ function buildBackEnd(context: string, createBroadcastChannel: BroadcastChannelC
     )
 }
 
-function buildFrontEnd(context: string, createBroadcastChannel: BroadcastChannelCreator) {
+function buildBroadcastFinder(context: string, createBroadcastChannel: BroadcastChannelCreator) {
     return Channel.broadcast<LookupMessage>(context).pipe(
         switchMap(lookup => {
             lookup.next({

@@ -2,21 +2,21 @@
 import { Observable, map } from "rxjs"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { ChannelReceiver } from "./channel-receiver"
-import { Coordinator } from "./coordinator"
+import { Advertiser, Finder } from "./coordinator"
 import { Target } from "./processing"
-import { CallOptions } from "./sender"
+import { VolatileCallOptions } from "./sender"
 import { registry } from "./util"
 import { wrap } from "./wrap"
 
 interface ExposeMigratingConfig<T extends Target> {
 
-    readonly coordinator: Coordinator
+    readonly advertiser: Advertiser
     readonly target: ValueOrFactory<Observable<T>, [unknown]>
 
 }
 
 export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<T>) {
-    return registry(config.coordinator.backEnd.pipe(
+    return registry(config.advertiser.pipe(
         map(action => {
             if (action.action === "add") {
                 return {
@@ -32,16 +32,19 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
     )).subscribe()
 }
 
-export interface WrapMigratingConfig extends CallOptions {
+export interface WrapMigratingConfig extends VolatileCallOptions {
 
-    readonly coordinator: Coordinator
+    readonly finder: Finder
 
 }
 
 export function wrapMigrating<T extends Target>(config: WrapMigratingConfig) {
     return wrap<T>({
-        channel: config.coordinator.frontEnd,
+        channel: config.finder,
+        connectionTimeout: config.connectionTimeout,
+        autoRetryPromises: config.autoRetryPromises,
         autoRetryObservables: config.autoRetryObservables,
-        autoRetryPromises: config.autoRetryPromises
+        promiseTimeout: config.promiseTimeout,
+        observableTimeout: config.observableTimeout,
     })
 }

@@ -65,6 +65,15 @@ export type HasPostMessage<T = unknown> = {
 }
 
 /**
+ * Utility type for anything that has a postMessage method.
+ */
+export type HasPostMessageWithTransferrables<T = unknown> = {
+
+    postMessage(value: T, transfer?: Transferable[] | undefined): void
+
+}
+
+/**
  * A hack function to acquire a web lock and hold onto it.
  */
 export async function acquireWebLock(name: string, options?: LockOptions) {
@@ -101,13 +110,12 @@ export function holdWebLock(name: string, options?: Omit<LockOptions, "signal">)
         const controller = new AbortController()
         const lock = acquireWebLock(name, { ...options, signal: controller.signal })
         lock.then(() => subscriber.next()).catch(error => {
-            /* if (error instanceof DOMException && error.code === error.ABORT_ERR) {
-                 return
-             }*/
+            if (error instanceof DOMException && error.code === error.ABORT_ERR) {
+                return
+            }
             subscriber.error(error)
         })
         return () => {
-            console.log("TODO aborting lock", name)
             controller.abort()
             lock.then(release => release())
         }
@@ -137,7 +145,7 @@ export function closing<T>(factory: () => T, close: (value: T) => void) {
 /**
  * Types for remote errors.
  */
-export type RemoteErrorCode = "timeout" | "worker-disappeared" | "invalid-message"
+export type RemoteErrorCode = "timeout" | "worker-disappeared" | "invalid-message" | "call-failed"
 
 /**
  * A special error with a retryable property, used when a migrating worker dies.
@@ -161,22 +169,16 @@ export type RegistryAction<K, V> = {
     readonly action: "clear"
 }
 
-export interface RegistryOptions {
-
-    // readonly allowMultipleUnsubscribes?: boolean | undefined
-
-}
-
-export function registryWith<K, V>(options: RegistryOptions = {}) {
+export function registryWith<K, V>() {
     return (observable: Observable<RegistryAction<K, V>>) => {
-        return registry(observable, options)
+        return registry(observable)
     }
 }
 
 /**
  * An observable that combines other observables, but also allows removing them.
  */
-export function registry<K, V>(observable: Observable<RegistryAction<K, V>>, options: RegistryOptions = {}) {
+export function registry<K, V>(observable: Observable<RegistryAction<K, V>>) {
     const observables = new Map<K, Subscription>()
     return observable.pipe(
         /*
@@ -204,12 +206,9 @@ export function registry<K, V>(observable: Observable<RegistryAction<K, V>>, opt
             }
             else {
                 const observable = observables.get(action.key)
-                // if (!options.allowMultipleUnsubscribes) {
-                //if (observable === undefined) {
-                //return throwError(() => new Error("Tried to remove a non existent observable from a registry."))
-                //}
-                //}
-                observable?.unsubscribe()
+                if (observable !== undefined) {
+                    observable.unsubscribe()
+                }
                 return EMPTY
             }
         }),

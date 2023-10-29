@@ -1,7 +1,8 @@
-import { Observable, Observer, combineLatest, first, fromEvent, map, merge, mergeMap, of, skip, startWith, switchMap, throwError, timer } from "rxjs"
+import { Observable, Observer, combineLatest, fromEvent, map, mergeMap, of, startWith, switchMap, throwError, timer } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { Batcher, BatcherOptions } from "./batcher"
-import { HasPostMessage, Next, ObservableAndObserver, RemoteError, closing } from "./util"
+import { optional, singleOrError } from "./operators"
+import { HasPostMessage, HasPostMessageWithTransferrables, Next, ObservableAndObserver, RemoteError, closing } from "./util"
 
 /**
  * A channel creates Connection objects.
@@ -87,7 +88,29 @@ export namespace Channel {
     export function port<I = never, O = unknown>(open: Observable<Port<I, O>>): Channel<I, O> {
         return new Observable<Connection<I, O>>(subscriber => {
             const subscription = open.subscribe(object => {
-                subscriber.next(build(fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)), object.postMessage.bind(object)))
+                subscriber.next(build(
+                    fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
+                    object.postMessage.bind(object)
+                ))
+            })
+            return () => {
+                subscription.unsubscribe()
+            }
+        })
+    }
+
+    /**
+     * A two way port.
+     */
+    export type TransferrablePort<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & HasPostMessageWithTransferrables<O>
+
+    /**
+     * Creates a channel from a port.
+     */
+    export function transferrablePort<I = never, O = unknown>(open: Observable<TransferrablePort<I, O>>): Channel<MessageEvent<I>, [O, Transferable[] | undefined]> {
+        return new Observable<Connection<MessageEvent<I>, [O, Transferable[] | undefined]>>(subscriber => {
+            const subscription = open.subscribe(object => {
+                subscriber.next(build(fromEvent<MessageEvent<I>>(object, "message"), value => object.postMessage(...value)))
             })
             return () => {
                 subscription.unsubscribe()
@@ -114,20 +137,12 @@ export namespace Channel {
     }
 
     export function volatile<I, O>(channel: VolatileChannel<I, O>, retryOnInterrupt: boolean, connectionTimeout: number) {
-        return merge(
-            channel.pipe(first()),
-            channel.pipe(
-                skip(1),
-                map(sender => {
-                    if (retryOnInterrupt) {
-                        return sender
-                    }
-                    else {
-                        throw new RemoteError("worker-disappeared", "The worker disappeared. Please try again.")
-                    }
-                })
-            )
-        ).pipe(
+        return channel.pipe(
+            optional((() => {
+                if (!retryOnInterrupt) {
+                    return singleOrError(() => new RemoteError("worker-disappeared", "The worker disappeared. Please try again."))
+                }
+            })()),
             startWith(undefined),
             switchMap(connection => {
                 if (connection === undefined) {

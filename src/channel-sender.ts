@@ -1,25 +1,82 @@
 import PLazy from "p-lazy"
-import { BehaviorSubject, Observable, ObservableNotification, OperatorFunction, ReplaySubject, dematerialize, filter, finalize, firstValueFrom, map, share, switchMap, throwError, timeout } from "rxjs"
+import { BehaviorSubject, Observable, ObservableNotification, ReplaySubject, dematerialize, filter, finalize, firstValueFrom, map, of, share, switchMap, throwError, timeout } from "rxjs"
 import { Channel, VolatileChannel } from "./channel"
+import { optional } from "./operators"
 import { Answer, Call, ID } from "./processing"
-import { CallOptions, Sender } from "./sender"
+import { VolatileCallOptions, VolatileSender } from "./sender"
 import { ObservableAndPromise, RemoteError, generateId } from "./util"
 
-const DEFAULT_CONNECTION_TIMEOUT = 1000//TODO raise
+const DEFAULT_CONNECTION_TIMEOUT = 10000 //TODO why do we hit this when its syncing? should not be that backed up
 
-export interface ChannelSenderOptions extends CallOptions {
+/*
+export interface ChannelSenderOptions {
+
+    readonly channel: Channel<ObservableNotification<Answer>, Call>
+    readonly promiseTimeout?: number
+
+}
+export class ADumbSender implements Sender {
+
+    constructor(private readonly config: ChannelSenderOptions) {
+
+    }
+
+    close() {
+        //TODO important 
+    }
+    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
+        const observable = defer(() => {
+            const id = generateId()
+            this.config.connection.next({
+                kind: "S",
+                id,
+                command,
+                data
+            })
+            return this.config.connection.pipe(
+                finalize(() => {
+                    //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
+                    //if the channel closes, this fails - its not necessary in that case
+                    this.config.connection.next({
+                        kind: "U",
+                        id
+                    })
+                }),
+                dematerialize(),
+                answer(id),
+            )
+        }).pipe(
+            share()
+        )
+        const promise = PLazy.from(async () => {
+            const id = generateId()
+            const observable = this.config.connection.pipe(dematerialize(), answer(id, this.config.promiseTimeout))
+            this.config.connection.next({
+                kind: "X",
+                id,
+                command,
+                data
+            })
+            return observable
+        })
+        return new ObservableAndPromise(observable, promise)
+    }
+
+}
+*/
+
+export interface VolatileChannelSenderOptions extends VolatileCallOptions {
 
     readonly channel: VolatileChannel<ObservableNotification<Answer>, Call>
-    readonly connectionTimeout?: number
 
 }
 
-export class ChannelSender implements Sender {
+export class VolatileChannelSender implements VolatileSender {
 
     private readonly closed
     private readonly channel
 
-    constructor(private readonly config: ChannelSenderOptions) {
+    constructor(private readonly config: VolatileChannelSenderOptions) {
         this.closed = new BehaviorSubject<boolean>(false)
         /* this.channel = config.channel.pipe(
              share({
@@ -31,7 +88,6 @@ export class ChannelSender implements Sender {
          )*/
         this.channel = this.closed.pipe(
             switchMap(closed => {
-                console.log("TODO closed", closed)
                 if (closed) {
                     return throwError(() => new Error("This remote is closed."))
                 }
@@ -46,19 +102,20 @@ export class ChannelSender implements Sender {
         )
     }
 
-    connected() {
-        return this.current(true).pipe(map(() => void 0))
+    watch() {
+        return this.current(true).pipe(map(connection => new VolatileChannelSender({ ...this.config, channel: of(connection) })))
     }
     close() {
         //TODO can we complete closed?
         this.closed.next(true)
     }
-    withOptions(options: CallOptions) {
-        return new ChannelSender({ ...this.config, channel: this.channel, ...options })
+    withOptions(options: VolatileCallOptions) {
+        return new VolatileChannelSender({ ...this.config, ...options, channel: this.channel })
     }
 
-    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
-        const observable = this.current(this.config.autoRetryObservables ?? true).pipe(
+    /*
+    observe(autoRetry: boolean, command: string, ...data: readonly unknown[]): Output<unknown> {
+        return this.current(autoRetry).pipe(
             switchMap(connection => {
                 const id = generateId()
                 connection.next({
@@ -82,11 +139,56 @@ export class ChannelSender implements Sender {
             }),
             share()
         )
+    }
+    execute(command: string, ...data: readonly unknown[]): Promise<unknown> {
+        return firstValueFrom(this.executeRetry(command, ...data))
+    }
+    executeRetry(command: string, ...data: readonly unknown[]): Observable<unknown> {
+        return this.current(true).pipe(
+            switchMap(connection => {
+                const id = generateId()
+                const observable = connection.pipe(dematerialize(), answer(id, this.config.promiseTimeout))
+                connection.next({
+                    kind: "X",
+                    id,
+                    command,
+                    data
+                })
+                return observable
+            })
+        )
+    }*/
+
+    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
+        const observable = this.current(this.config.autoRetryObservables ?? true).pipe(
+            switchMap(connection => {
+                const id = generateId()
+                connection.next({
+                    kind: "S",
+                    id,
+                    command,
+                    data
+                })
+                return connection.pipe(
+                    finalize(() => {
+                        //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
+                        //if the channel closes, this fails - its not necessary in that case
+                        connection.next({
+                            kind: "U",
+                            id
+                        })
+                    }),
+                    dematerialize(),
+                    answer(id, command, this.config.observableTimeout),
+                )
+            }),
+            share()
+        )
         const promise = PLazy.from(async () => {
             return firstValueFrom(this.current(this.config.autoRetryPromises ?? false).pipe(
                 switchMap(connection => {
                     const id = generateId()
-                    const observable = connection.pipe(dematerialize(), answer(id, this.config.promiseTimeout))
+                    const observable = connection.pipe(dematerialize(), answer(id, command, this.config.promiseTimeout))
                     connection.next({
                         kind: "X",
                         id,
@@ -106,14 +208,14 @@ export class ChannelSender implements Sender {
 
 }
 
-function answer(id: ID, timeoutMs?: number | undefined) {
+function answer(id: ID, command: string, timeoutMs?: number | undefined) {
     return (observable: Observable<Answer>) => {
         return observable.pipe(
             filter(response => response.id === id),
             dematerialize(),
             optional((() => {
                 if (timeoutMs !== undefined) {
-                    const timeoutMessage = "The remote call has timed out after " + timeoutMs.toLocaleString() + "ms."
+                    const timeoutMessage = "The remote call to \"" + command + "\" has timed out after " + timeoutMs.toLocaleString() + "ms."
                     return timeout({
                         first: timeoutMs,
                         with: () => {
@@ -123,13 +225,5 @@ function answer(id: ID, timeoutMs?: number | undefined) {
                 }
             })())
         )
-    }
-}
-function optional<I, O>(options?: OperatorFunction<I, O> | undefined) {
-    return (observable: Observable<I>) => {
-        if (options !== undefined) {
-            return observable.pipe(options)
-        }
-        return observable
     }
 }

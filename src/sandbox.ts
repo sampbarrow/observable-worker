@@ -1,4 +1,3 @@
-import { EMPTY, Observable, filter, map, mergeMap, of, partition, switchMap } from "rxjs"
 import { Channel } from "./channel"
 import { Answer, Call } from "./processing"
 
@@ -19,6 +18,9 @@ export type WrapExclusiveConfig = {
 
 }
 
+//TODO pausable/interruptible channel
+
+/*
 export function startAndStopSender<I, O>(condition: Observable<boolean>, channel: Channel<ExclusiveMessage<I>, ExclusiveMessage<O>>): Channel<I, O> {
     return condition.pipe(
         switchMap(condition => {
@@ -82,3 +84,4 @@ export function startAndStopChannel<I, O>(channel: Channel<ExclusiveMessage<I>, 
         })
     )
 }
+*/
