@@ -1,77 +1,51 @@
 import PLazy from "p-lazy"
 import { BehaviorSubject, Observable, ObservableNotification, ReplaySubject, dematerialize, filter, finalize, firstValueFrom, map, of, share, switchMap, throwError, timeout } from "rxjs"
-import { Channel, VolatileChannel } from "./channel"
+import { ChannelFactory, withVolatility } from "./channel"
 import { optional } from "./operators"
 import { Answer, Call, ID } from "./processing"
-import { VolatileCallOptions, VolatileSender } from "./sender"
+import { CallOptions, Sender } from "./sender"
 import { ObservableAndPromise, RemoteError, generateId } from "./util"
 
-const DEFAULT_CONNECTION_TIMEOUT = 10000 //TODO why do we hit this when its syncing? should not be that backed up
-
 /*
-export interface ChannelSenderOptions {
+export interface ChannelSenderOptions extends CallOptions {
 
     readonly channel: Channel<ObservableNotification<Answer>, Call>
-    readonly promiseTimeout?: number
 
 }
-export class ADumbSender implements Sender {
+
+export class ChannelSender implements Sender {
+
+    private readonly subscription
+    private readonly channel = new ReplaySubject<Connection<ObservableNotification<Answer>, Call>>
 
     constructor(private readonly config: ChannelSenderOptions) {
-
+        this.subscription = config.channel.subscribe(this.channel)
+        /*
+        this.channel = config.channel.pipe(
+            share({
+                connector: () => new ReplaySubject(1),
+                resetOnRefCountZero: false,
+                resetOnComplete: false,
+                resetOnError: true,
+            })
+        )
     }
 
     close() {
-        //TODO important 
-    }
-    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
-        const observable = defer(() => {
-            const id = generateId()
-            this.config.connection.next({
-                kind: "S",
-                id,
-                command,
-                data
-            })
-            return this.config.connection.pipe(
-                finalize(() => {
-                    //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
-                    //if the channel closes, this fails - its not necessary in that case
-                    this.config.connection.next({
-                        kind: "U",
-                        id
-                    })
-                }),
-                dematerialize(),
-                answer(id),
-            )
-        }).pipe(
-            share()
-        )
-        const promise = PLazy.from(async () => {
-            const id = generateId()
-            const observable = this.config.connection.pipe(dematerialize(), answer(id, this.config.promiseTimeout))
-            this.config.connection.next({
-                kind: "X",
-                id,
-                command,
-                data
-            })
-            return observable
-        })
-        return new ObservableAndPromise(observable, promise)
+        this.subscription.unsubscribe()
+        this.channel.complete()
     }
 
 }
 */
 
-export interface VolatileChannelSenderOptions extends VolatileCallOptions {
+export interface VolatileChannelSenderOptions extends CallOptions {
 
-    readonly channel: VolatileChannel<ObservableNotification<Answer>, Call>
+    readonly channel: ChannelFactory<ObservableNotification<Answer>, Call>
 
 }
 
-export class VolatileChannelSender implements VolatileSender {
+export class VolatileChannelSender implements Sender {
 
     private readonly closed
     private readonly channel
@@ -102,20 +76,26 @@ export class VolatileChannelSender implements VolatileSender {
         )
     }
 
-    watch() {
-        return this.current(true).pipe(map(connection => new VolatileChannelSender({ ...this.config, channel: of(connection) })))
+    watch(autoReconnect = true) {
+        return this.channel.pipe(
+            withVolatility(autoReconnect, this.config.connectionTimeout),
+            map(channel => {
+                return new VolatileChannelSender({ ...this.config, channel: of(channel) })
+            })
+        )
     }
     close() {
-        //TODO can we complete closed?
+        //TODO complete
         this.closed.next(true)
     }
-    withOptions(options: VolatileCallOptions) {
+    withOptions(options: CallOptions) {
         return new VolatileChannelSender({ ...this.config, ...options, channel: this.channel })
     }
 
-    /*
-    observe(autoRetry: boolean, command: string, ...data: readonly unknown[]): Output<unknown> {
-        return this.current(autoRetry).pipe(
+    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
+        const observable = this.channel.pipe(
+            withVolatility(this.config.autoRetryObservables ?? true, this.config.connectionTimeout),
+            switchMap(_ => _),
             switchMap(connection => {
                 const id = generateId()
                 connection.next({
@@ -134,76 +114,27 @@ export class VolatileChannelSender implements VolatileSender {
                         })
                     }),
                     dematerialize(),
-                    answer(id, this.config.observableTimeout),
+                    answer(id, command),
                 )
-            }),
-            share()
-        )
-    }
-    execute(command: string, ...data: readonly unknown[]): Promise<unknown> {
-        return firstValueFrom(this.executeRetry(command, ...data))
-    }
-    executeRetry(command: string, ...data: readonly unknown[]): Observable<unknown> {
-        return this.current(true).pipe(
-            switchMap(connection => {
-                const id = generateId()
-                const observable = connection.pipe(dematerialize(), answer(id, this.config.promiseTimeout))
-                connection.next({
-                    kind: "X",
-                    id,
-                    command,
-                    data
-                })
-                return observable
             })
         )
-    }*/
-
-    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
-        const observable = this.current(this.config.autoRetryObservables ?? true).pipe(
-            switchMap(connection => {
-                const id = generateId()
-                connection.next({
-                    kind: "S",
-                    id,
-                    command,
-                    data
-                })
-                return connection.pipe(
-                    finalize(() => {
-                        //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
-                        //if the channel closes, this fails - its not necessary in that case
-                        connection.next({
-                            kind: "U",
-                            id
-                        })
-                    }),
-                    dematerialize(),
-                    answer(id, command, this.config.observableTimeout),
-                )
-            }),
-            share()
-        )
         const promise = PLazy.from(async () => {
-            return firstValueFrom(this.current(this.config.autoRetryPromises ?? false).pipe(
+            return await firstValueFrom(this.channel.pipe(
+                withVolatility(this.config.autoRetryPromises ?? false, this.config.connectionTimeout),
+                switchMap(_ => _),
                 switchMap(connection => {
                     const id = generateId()
-                    const observable = connection.pipe(dematerialize(), answer(id, command, this.config.promiseTimeout))
                     connection.next({
                         kind: "X",
                         id,
                         command,
                         data
                     })
-                    return observable
+                    return connection.pipe(dematerialize(), answer(id, command, this.config.promiseTimeout))
                 })
             ))
         })
         return new ObservableAndPromise(observable, promise)
-    }
-
-    private current(autoRetry: boolean) {
-        return Channel.volatile(this.channel, autoRetry, this.config.connectionTimeout ?? DEFAULT_CONNECTION_TIMEOUT)
     }
 
 }

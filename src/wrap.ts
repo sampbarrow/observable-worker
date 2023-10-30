@@ -1,9 +1,9 @@
-import { ObservableNotification } from "rxjs"
+import { ObservableNotification, of } from "rxjs"
 import { BatcherOptions } from "./batcher"
 import { Channel } from "./channel"
 import { VolatileChannelSender, VolatileChannelSenderOptions } from "./channel-sender"
 import { Answer, Call, Target } from "./processing"
-import { MockRemote, Remote, VolatileRemote, VolatileSenderRemote } from "./remote"
+import { MockRemote, Remote, SenderRemote } from "./remote"
 
 /*
 export class MockRemote {
@@ -39,15 +39,16 @@ export interface WrapBatchingOptions extends BatcherOptions {
 
 export function wrapBatching<T extends Target>(options: WrapBatchingOptions) {
     return wrap<T>({
-        channel: Channel.batching(options.channel, { debounceTime: options.debounceTime })
+        //TODO hacky
+        channel: of(Channel.batching(options.channel, { debounceTime: options.debounceTime }))
     })
 }
 
 export interface WrapOptions extends VolatileChannelSenderOptions {
 }
 
-export function wrap<T extends Target>(options: WrapOptions): VolatileRemote<T> {
-    return new VolatileSenderRemote<T>(new VolatileChannelSender(options))
+export function wrap<T extends Target>(options: WrapOptions): Remote<T> {
+    return new SenderRemote<T>(new VolatileChannelSender(options))
 }
 
 export function wrapMock<T extends Target>(object: T): Remote<T> {

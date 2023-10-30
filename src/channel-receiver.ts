@@ -25,7 +25,7 @@ export class ChannelReceiver<T extends Target> extends Observable<void> implemen
                             if (call.kind === "U") {
                                 return {
                                     action: "delete" as const,
-                                    key: call.id,
+                                    key: call.id
                                 }
                             }
                             else {
@@ -64,7 +64,7 @@ export class ChannelReceiver<T extends Target> extends Observable<void> implemen
                         map(([id, answer]) => {
                             return {
                                 id,
-                                ...answer,
+                                ...answer
                             }
                         }),
                         materialize(),

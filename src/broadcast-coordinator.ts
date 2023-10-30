@@ -1,8 +1,8 @@
-import { EMPTY, ObservableNotification, combineLatest, filter, first, ignoreElements, map, merge, mergeMap, of, startWith, switchMap, tap } from "rxjs"
+import { EMPTY, ObservableNotification, combineLatest, filter, first, from, ignoreElements, map, merge, mergeMap, of, startWith, switchMap, takeUntil, tap } from "rxjs"
 import { BatcherOptions } from "./batcher"
-import { Channel } from "./channel"
+import { Channel, ChannelFactory } from "./channel"
 import { Answer, Call } from "./processing"
-import { generateId, holdWebLock, onWebLockAvailable, randomLock } from "./util"
+import { generateId, holdWebLock, randomLock, waitForLock } from "./util"
 
 export const DEFAULT_CONTEXT = "default"
 
@@ -43,7 +43,7 @@ function buildBroadcastAdvertiser(context: string, createBroadcastChannel: Broad
             return merge(
                 combineLatest([
                     Channel.broadcast<LookupMessage>(context),
-                    randomLock("registration-")
+                    randomLock()
                 ]).pipe(
                     switchMap(([lookupConnection, lockId]) => {
                         return lookupConnection.pipe(
@@ -74,20 +74,23 @@ function buildBroadcastAdvertiser(context: string, createBroadcastChannel: Broad
                                     type: "clientRegistered",
                                     clientId: message.clientId
                                 })
-                                return onWebLockAvailable(message.lockId).pipe(
-                                    map(() => {
-                                        return {
-                                            action: "delete" as const,
-                                            key: message.clientId,
-                                        }
-                                    }),
-                                    startWith({
+                                const lock = waitForLock(message.lockId)
+                                return merge(
+                                    of({
                                         action: "add" as const,
                                         key: message.clientId,
                                         observable: createBroadcastChannel<Call, ObservableNotification<Answer>>(message.callChannelId, message.answerChannelId)
-                                    })
+                                    }),
+                                    from(lock).pipe(
+                                        map(() => {
+                                            return {
+                                                action: "delete" as const,
+                                                key: message.clientId
+                                            }
+                                        })
+                                    )
                                 )
-                            }),
+                            })
                         )
                     })
                 )
@@ -96,7 +99,7 @@ function buildBroadcastAdvertiser(context: string, createBroadcastChannel: Broad
     )
 }
 
-function buildBroadcastFinder(context: string, createBroadcastChannel: BroadcastChannelCreator) {
+function buildBroadcastFinder(context: string, createBroadcastChannel: BroadcastChannelCreator): ChannelFactory<ObservableNotification<Answer>, Call> {
     return Channel.broadcast<LookupMessage>(context).pipe(
         switchMap(lookup => {
             lookup.next({
@@ -112,7 +115,7 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
                     )
                 }),
                 switchMap(server => {
-                    return randomLock("client-").pipe(
+                    return randomLock().pipe(
                         switchMap(lockId => {
                             const registration = Channel.broadcast<RegistrationMessage>(server.registrationChannelId)
                             return registration.pipe(
@@ -120,7 +123,6 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
                                     const clientId = generateId()
                                     const callChannelId = generateId()
                                     const answerChannelId = generateId()
-                                    //TODO try to ensure proper priorities or just rely on locks?
                                     registration.next({
                                         type: "registerClient",
                                         clientId,
@@ -128,23 +130,22 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
                                         callChannelId,
                                         answerChannelId,
                                     })
-                                    return merge(
-                                        onWebLockAvailable(server.lockId).pipe(map(() => undefined)),
-                                        registration.pipe(
-                                            filter(message => message.type === "clientRegistered" && message.clientId === clientId),
-                                            first(),
-                                            switchMap(() => {
-                                                return createBroadcastChannel<ObservableNotification<Answer>, Call>(answerChannelId, callChannelId)
-                                            })
-                                        )
+                                    return registration.pipe(
+                                        filter(message => message.type === "clientRegistered" && message.clientId === clientId),
+                                        first(),
+                                        map(() => {
+                                            return createBroadcastChannel<ObservableNotification<Answer>, Call>(answerChannelId, callChannelId).pipe(
+                                                takeUntil(waitForLock(server.lockId))
+                                            )
+                                        })
                                     )
                                 })
                             )
-                        })
+                        }),
                     )
                 })
             )
-        })
+        }),
     )
 }
 

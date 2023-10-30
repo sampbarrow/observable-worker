@@ -1,8 +1,15 @@
-import { Observable, Observer, combineLatest, fromEvent, map, mergeMap, of, startWith, switchMap, throwError, timer } from "rxjs"
+import { Observable, Observer, combineLatest, concatWith, fromEvent, map, mergeMap, of, throwError } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { Batcher, BatcherOptions } from "./batcher"
-import { optional, singleOrError } from "./operators"
 import { HasPostMessage, HasPostMessageWithTransferrables, Next, ObservableAndObserver, RemoteError, closing } from "./util"
+
+export const DEFAULT_CONNECTION_TIMEOUT = 10000 //TODO why do we hit this when its syncing? should not be that backed up
+
+/**
+ * A connection sends and receives messages.
+ */
+export interface Connection<I, O> extends Observable<I>, Pick<Observer<O>, "next"> {
+}
 
 /**
  * A channel creates Connection objects.
@@ -10,13 +17,10 @@ import { HasPostMessage, HasPostMessageWithTransferrables, Next, ObservableAndOb
 export interface Channel<I, O> extends Observable<Connection<I, O>> {
 }
 
-export interface VolatileChannel<I, O> extends Observable<Connection<I, O> | undefined> {
-}
-
 /**
- * A connection sends and receives messages.
+ * A channel factory creates channels.
  */
-export interface Connection<I, O> extends Observable<I>, Pick<Observer<O>, "next"> {
+export interface ChannelFactory<I, O> extends Observable<Channel<I, O>> {
 }
 
 export namespace Channel {
@@ -36,7 +40,7 @@ export namespace Channel {
     export function unbatching<I, O>(channel: Channel<I[], O[]>) {
         return channel.pipe(
             map(connection => {
-                return build<I, O>(connection.pipe(mergeMap(items => items)), value => connection.next([value]))
+                return from<I, O>(connection.pipe(mergeMap(items => items)), value => connection.next([value]))
             })
         )
     }
@@ -48,7 +52,7 @@ export namespace Channel {
         return channel.pipe(
             map(connection => {
                 const batcher = new Batcher<O>(connection.next.bind(connection), options)
-                return build<I, O>(
+                return from<I, O>(
                     connection.pipe(mergeMap(items => items)),
                     batcher.add.bind(batcher)
                 )
@@ -60,14 +64,14 @@ export namespace Channel {
      * Creates a channel from a broadcast channel.
      */
     export function broadcast<T>(name: string): Channel<T, T> {
-        return port(closing(() => new BroadcastChannel(name), channel => setTimeout(() => channel.close(), 1000)))//TODO hack!!!!
+        return port(closing(() => new BroadcastChannel(name), channel => () => channel.close()))
     }
 
     /**
      * Creates a channel from a two broadcast channels, one for input and one for output.
      */
     export function dualBroadcast<I, O>(input: string, output: string): Channel<I, O> {
-        return combine(broadcast<I>(input), broadcast<O>(output))
+        return combineLatest([broadcast<I>(input), broadcast<O>(output)]).pipe(map(([a, b]) => from(a, b)))
     }
 
     /**
@@ -88,9 +92,11 @@ export namespace Channel {
     export function port<I = never, O = unknown>(open: Observable<Port<I, O>>): Channel<I, O> {
         return new Observable<Connection<I, O>>(subscriber => {
             const subscription = open.subscribe(object => {
-                subscriber.next(build(
+                subscriber.next(from(
                     fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
-                    object.postMessage.bind(object)
+                    value => {
+                        object.postMessage(value)
+                    }
                 ))
             })
             return () => {
@@ -110,7 +116,7 @@ export namespace Channel {
     export function transferrablePort<I = never, O = unknown>(open: Observable<TransferrablePort<I, O>>): Channel<MessageEvent<I>, [O, Transferable[] | undefined]> {
         return new Observable<Connection<MessageEvent<I>, [O, Transferable[] | undefined]>>(subscriber => {
             const subscription = open.subscribe(object => {
-                subscriber.next(build(fromEvent<MessageEvent<I>>(object, "message"), value => object.postMessage(...value)))
+                subscriber.next(from(fromEvent<MessageEvent<I>>(object, "message"), value => object.postMessage(...value)))
             })
             return () => {
                 subscription.unsubscribe()
@@ -121,40 +127,39 @@ export namespace Channel {
     /**
      * Combine and observable and observer into a channel.
      */
-    export function combine<I, O>(input: Channel<I, never>, output: Channel<unknown, O>) {
-        return combineLatest({ input, output }).pipe(
-            map(connection => {
-                return new ObservableAndObserver(connection.input, connection.output)
-            })
-        )
-    }
-
-    /**
-     * Combine and observable and observer into a channel.
-     */
-    export function build<I, O>(observable: Observable<I>, next: Next<O>): Connection<I, O> {
+    export function from<I, O>(observable: Observable<I>, next: Next<O>): Connection<I, O> {
         return new ObservableAndObserver(observable, next)
     }
 
-    export function volatile<I, O>(channel: VolatileChannel<I, O>, retryOnInterrupt: boolean, connectionTimeout: number) {
+    /*
+    export function volatile2<I, O>(channel: VolatileChannel<I, O>, retryOnInterrupt: boolean, connectionTimeout: number) {
+        if (retryOnInterrupt) {
+            return channel //TODO timeout somehow
+        }
         return channel.pipe(
-            optional((() => {
-                if (!retryOnInterrupt) {
-                    return singleOrError(() => new RemoteError("worker-disappeared", "The worker disappeared. Please try again."))
-                }
-            })()),
-            startWith(undefined),
-            switchMap(connection => {
-                if (connection === undefined) {
-                    return timer(connectionTimeout).pipe(
-                        mergeMap(() => {
-                            return throwError(() => new RemoteError("timeout", "Could not establish a connection within the timeout of " + connectionTimeout.toLocaleString() + "ms."))
-                        })
-                    )
-                }
-                return of(connection)
+            map(connection => {
+                return connection.pipe(endWithError(() => new RemoteError("worker-disappeared", "The worker disappeared. Please try again.")))
             })
         )
     }
+    export function volatile1<I, O>(channel: VolatileChannel<I, O>, retryOnInterrupt: boolean, connectionTimeout: number) {
+        return volatile2(channel, retryOnInterrupt, connectionTimeout).pipe(switchMap(_ => _))
+    }*/
 
+}
+
+export function timeoutError() {
+    return throwError(() => new RemoteError("timeout", "This connection has timed out."))
+}
+export function withVolatility<I, O>(retryOnInterrupt: boolean, connectionTimeout = DEFAULT_CONNECTION_TIMEOUT) {
+    return (observable: ChannelFactory<I, O>) => {
+        if (retryOnInterrupt) {
+            return observable //TODO timeout somehow
+        }
+        return observable.pipe(
+            map(observable => {
+                return observable.pipe(concatWith(throwError(() => new RemoteError("worker-disappeared", "The worker disappeared. Please try again."))))
+            })
+        )
+    }
 }

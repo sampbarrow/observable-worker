@@ -1,7 +1,7 @@
 
 import { customAlphabet } from "nanoid"
 import pDefer from "p-defer"
-import { EMPTY, Observable, Observer, Subscription, defer, first, map, mergeMap } from "rxjs"
+import { EMPTY, Observable, Observer, Subscription, defer, map, mergeMap } from "rxjs"
 import { Connection } from "./channel"
 import { Allowed, Target } from "./processing"
 
@@ -98,8 +98,8 @@ export function randomLock(tag: string = "") {
     })
 }
 
-export function onWebLockAvailable(name: string) {
-    return holdWebLock(name, { mode: "shared" }).pipe(first())
+export async function waitForLock(name: string) {
+    return await navigator.locks.request(name, { mode: "shared" }, async () => void 0)
 }
 
 /**

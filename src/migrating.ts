@@ -4,7 +4,7 @@ import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { ChannelReceiver } from "./channel-receiver"
 import { Advertiser, Finder } from "./coordinator"
 import { Target } from "./processing"
-import { VolatileCallOptions } from "./sender"
+import { CallOptions } from "./sender"
 import { registry } from "./util"
 import { wrap } from "./wrap"
 
@@ -32,7 +32,7 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
     )).subscribe()
 }
 
-export interface WrapMigratingConfig extends VolatileCallOptions {
+export interface WrapMigratingConfig extends CallOptions {
 
     readonly finder: Finder
 
@@ -45,6 +45,5 @@ export function wrapMigrating<T extends Target>(config: WrapMigratingConfig) {
         autoRetryPromises: config.autoRetryPromises,
         autoRetryObservables: config.autoRetryObservables,
         promiseTimeout: config.promiseTimeout,
-        observableTimeout: config.observableTimeout,
     })
 }
