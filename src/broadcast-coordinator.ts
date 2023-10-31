@@ -1,8 +1,8 @@
-import { EMPTY, ObservableNotification, combineLatest, filter, first, from, ignoreElements, map, merge, mergeMap, of, startWith, switchMap, takeUntil, tap } from "rxjs"
+import { EMPTY, ObservableNotification, combineLatest, filter, first, from, ignoreElements, map, merge, mergeMap, of, shareReplay, startWith, switchMap, takeUntil, tap } from "rxjs"
 import { BatcherOptions } from "./batcher"
 import { Channel, ChannelFactory } from "./channel"
 import { Answer, Call } from "./processing"
-import { generateId, holdWebLock, randomLock, waitForLock } from "./util"
+import { generateId, observeRandomWebLock, observeWebLock, waitForLock } from "./util"
 
 export const DEFAULT_CONTEXT = "default"
 
@@ -36,27 +36,27 @@ export function broadcastAdvertiserBatching(options: BroadcastCoordinatorOptions
 type BroadcastChannelCreator = <I, O>(id1: string, id2: string) => Channel<I, O>
 
 function buildBroadcastAdvertiser(context: string, createBroadcastChannel: BroadcastChannelCreator) {
-    return holdWebLock(context).pipe(
+    return observeWebLock(context).pipe(
         switchMap(() => {
             const registrationChannelId = generateId()
             const registration = Channel.broadcast<RegistrationMessage>(registrationChannelId)
             return merge(
                 combineLatest([
                     Channel.broadcast<LookupMessage>(context),
-                    randomLock()
+                    observeRandomWebLock()
                 ]).pipe(
                     switchMap(([lookupConnection, lockId]) => {
                         return lookupConnection.pipe(
-                            filter(message => message.type === "askIfServerIsAvailable"),
+                            filter(message => message.type === "askIfWorkerIsAvailable"),
                             map(() => {
                                 return {
-                                    type: "serverIsAvailable" as const,
+                                    type: "workerIsAvailable" as const,
                                     registrationChannelId,
                                     lockId
                                 }
                             }),
                             startWith({
-                                type: "newServerStarted" as const,
+                                type: "newWorkerStarted" as const,
                                 registrationChannelId,
                                 lockId
                             }),
@@ -103,19 +103,19 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
     return Channel.broadcast<LookupMessage>(context).pipe(
         switchMap(lookup => {
             lookup.next({
-                type: "askIfServerIsAvailable"
+                type: "askIfWorkerIsAvailable"
             })
             return lookup.pipe(
-                mergeMap(message => message.type === "newServerStarted" || message.type === "serverIsAvailable" ? of(message) : EMPTY),
+                mergeMap(message => message.type === "newWorkerStarted" || message.type === "workerIsAvailable" ? of(message) : EMPTY),
                 first(),
                 switchMap(message => {
                     return merge(
                         of(message),
-                        lookup.pipe(mergeMap(message => message.type === "newServerStarted" ? of(message) : EMPTY))
+                        lookup.pipe(mergeMap(message => message.type === "newWorkerStarted" ? of(message) : EMPTY))
                     )
                 }),
                 switchMap(server => {
-                    return randomLock().pipe(
+                    return observeRandomWebLock().pipe(
                         switchMap(lockId => {
                             const registration = Channel.broadcast<RegistrationMessage>(server.registrationChannelId)
                             return registration.pipe(
@@ -135,7 +135,11 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
                                         first(),
                                         map(() => {
                                             return createBroadcastChannel<ObservableNotification<Answer>, Call>(answerChannelId, callChannelId).pipe(
-                                                takeUntil(waitForLock(server.lockId))
+                                                takeUntil(waitForLock(server.lockId)),
+                                                shareReplay(1)
+                                                //TODO adding this fixed a bug where responses would get duplicated 50+ times
+                                                //makes some kind of sense, but look into this a bit more to make sure best practices are being followed, here and in similar areas
+                                                //looks like it still might be doing this to some extent, just not as bad, could be dropped due to refCount?
                                             )
                                         })
                                     )
@@ -153,20 +157,20 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
  * Lookup
  */
 
-type LookupMessage = AskIfServerIsAvailableMessage | NewServerStartedMessage | ServerIsAvailableMessage
+type LookupMessage = AskIfWorkerIsAvailableMessage | NewWorkerStartedMessage | WorkerIsAvailableMessage
 
-type AskIfServerIsAvailableMessage = {
-    readonly type: "askIfServerIsAvailable"
+type AskIfWorkerIsAvailableMessage = {
+    readonly type: "askIfWorkerIsAvailable"
 }
 
-type NewServerStartedMessage = {
-    readonly type: "newServerStarted"
+type NewWorkerStartedMessage = {
+    readonly type: "newWorkerStarted"
     readonly registrationChannelId: string
     readonly lockId: string
 }
 
-type ServerIsAvailableMessage = {
-    readonly type: "serverIsAvailable"
+type WorkerIsAvailableMessage = {
+    readonly type: "workerIsAvailable"
     readonly registrationChannelId: string
     readonly lockId: string
 }

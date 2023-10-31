@@ -17,8 +17,6 @@ export type ObservableAndObserverConfig<I, O> = {
 
 }
 
-
-
 /**
  * Utility class for combining and observable and observer.
  */
@@ -88,24 +86,23 @@ export async function acquireWebLock(name: string, options?: LockOptions) {
     })
 }
 
-/**
- * A hack function to acquire a randomly named web lock as an observable. Releases when unsubscribed.
- */
-export function randomLock(tag: string = "") {
-    return defer(() => {
-        const lockId = tag + generateId()
-        return holdWebLock(lockId).pipe(map(() => lockId))
-    })
+export async function waitForLock(name: string): Promise<void> {
+    try {
+        return await navigator.locks.request(name, { mode: "shared" }, async () => void 0)
+    }
+    catch (error) {
+        //TODO code is deprecated, whats the alternative
+        if (error instanceof DOMException && error.code === error.ABORT_ERR) {
+            return
+        }
+        throw error
+    }
 }
 
-export async function waitForLock(name: string) {
-    return await navigator.locks.request(name, { mode: "shared" }, async () => void 0)
-}
-
 /**
- * A hack function to acquire a web lock as an observable. Releases when unsubscribed.
+ * Acquire a web lock as an observable. Releases when unsubscribed.
  */
-export function holdWebLock(name: string, options?: Omit<LockOptions, "signal">) {
+export function observeWebLock(name: string, options?: Omit<LockOptions, "signal">) {
     return new Observable<void>(subscriber => {
         const controller = new AbortController()
         const lock = acquireWebLock(name, { ...options, signal: controller.signal })
@@ -119,6 +116,16 @@ export function holdWebLock(name: string, options?: Omit<LockOptions, "signal">)
             controller.abort()
             lock.then(release => release())
         }
+    })
+}
+
+/**
+ * A hack function to acquire a randomly named web lock as an observable. Releases when unsubscribed.
+ */
+export function observeRandomWebLock(tag: string = "") {
+    return defer(() => {
+        const lockId = tag + generateId()
+        return observeWebLock(lockId).pipe(map(() => lockId))
     })
 }
 
@@ -189,6 +196,13 @@ export function registry<K, V>(observable: Observable<RegistryAction<K, V>>) {
         */
         mergeMap(action => {
             if (action.action === "add") {
+                /*
+                return action.observable.pipe(
+                    finalize(() => {
+                        observables.delete(action.key)
+                    }),
+                    map(value => [action.key, value] as const)
+                )*/
                 return new Observable<readonly [K, V]>(subscriber => {
                     const subscription = action.observable.pipe(map(value => [action.key, value] as const)).subscribe(subscriber)
                     observables.set(action.key, subscription)
