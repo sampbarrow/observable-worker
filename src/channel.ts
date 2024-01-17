@@ -78,7 +78,10 @@ export namespace Channel {
      * Creates a channel from a worker.
      */
     export function worker<I, O>(url: string | URL, options?: WorkerOptions | undefined): Channel<I, O> {
-        return port(closing(() => new Worker(url, options), worker => worker.terminate()))
+        return port(closing(() => {
+            console.log("TODO creating worker")
+            return new Worker(url, options)
+        }, worker => worker.terminate()))
     }
 
     /**
