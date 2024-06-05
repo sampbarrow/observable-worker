@@ -98,7 +98,13 @@ export namespace Channel {
                 subscriber.next(from(
                     fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
                     value => {
-                        object.postMessage(value)
+                        try {
+                            object.postMessage(value)
+                        }
+                        catch (e) {
+                            console.error(e)
+                            subscriber.error(e)
+                        }
                     }
                 ))
             })
