@@ -1,30 +1,53 @@
-import { Observable, map, of } from "rxjs"
-import { Proxied, Target } from "./processing"
-import { CallOptions, Sender } from "./sender"
-import { callOnTarget, proxy } from "./util"
+import { Observable, map } from "rxjs"
+import { Proxied, Sender, Target } from "./processing"
+import { VolatileSender } from "./sender"
+import { proxy } from "./util"
 
 export interface Remote<T extends Target> {
 
+    /**
+     * The proxied object.
+     */
     readonly proxy: Proxied<T>
-    watch(autoReconnect?: boolean | undefined): Observable<Proxied<T>>
-    options(options: CallOptions): Remote<T>
+
+    /**
+     * Close this channel.
+     */
     close(): void
 
 }
 
-export class SenderRemote<T extends Target> implements Remote<T>  {
+export interface VolatileRemote<T extends Target> {
+
+    /**
+     * The proxied object.
+     */
+    readonly proxy: Proxied<T>
+
+    /**
+     * Watch for a new proxied object.
+     * @deprecated
+     * @param autoReconnect 
+     */
+    watch(autoReconnect?: boolean | undefined): Observable<Proxied<T>>
+
+    /**
+     * Close this channel.
+     */
+    close(): void
+
+}
+
+export class VolatileSenderRemote<T extends Target> implements VolatileRemote<T> {
 
     readonly proxy
 
-    constructor(private readonly sender: Sender) {
-        this.proxy = proxySender<T>(this.sender)
+    constructor(private readonly sender: VolatileSender) {
+        this.proxy = proxy<T>(this.sender)
     }
 
     watch(autoReconnect?: boolean | undefined) {
-        return this.sender.watch(autoReconnect).pipe(map(sender => proxySender<T>(sender)))
-    }
-    options(options: CallOptions) {
-        return new SenderRemote<T>(this.sender.withOptions(options))
+        return this.sender.watch(autoReconnect).pipe(map(sender => proxy<T>(sender)))
     }
     close() {
         return this.sender.close()
@@ -32,39 +55,16 @@ export class SenderRemote<T extends Target> implements Remote<T>  {
 
 }
 
-export class MockRemote<T extends Target> implements Remote<T> {
+export class SenderRemote<T extends Target> implements Remote<T> {
 
     readonly proxy
 
-    constructor(object: T) {
-        this.proxy = proxy<T, Proxied<T>>(object, {
-            get(target, key) {
-                if (typeof key === "symbol") {
-                    throw new Error("No symbol calls on a proxy.")
-                }
-                return (...args: unknown[]) => callOnTarget(target, key, args)
-            }
-        })
+    constructor(private readonly sender: Sender) {
+        this.proxy = proxy<T>(this.sender)
     }
 
-    watch(): Observable<Proxied<T>> {
-        return of(this.proxy)
-    }
-    options(): Remote<T> {
-        return this
-    }
     close() {
+        return this.sender.close()
     }
 
-}
-
-function proxySender<T extends Target>(sender: Sender) {
-    return proxy<Sender, Proxied<T>>(sender, {
-        get(target, key) {
-            if (typeof key === "symbol") {
-                throw new Error("No symbol calls on a proxy.")
-            }
-            return (...args: unknown[]) => target.call(key, ...args)
-        }
-    })
 }

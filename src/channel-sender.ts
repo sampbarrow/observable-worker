@@ -1,12 +1,10 @@
-import PLazy from "p-lazy"
-import { BehaviorSubject, Observable, ObservableNotification, ReplaySubject, dematerialize, filter, finalize, firstValueFrom, map, of, share, switchMap, throwError, timeout } from "rxjs"
-import { ChannelFactory, withVolatility } from "./channel"
-import { optional } from "./operators"
-import { Answer, Call, ID } from "./processing"
-import { CallOptions, Sender } from "./sender"
-import { ObservableAndPromise, RemoteError, generateId } from "./util"
+import PLazy from "p-lazy";
+import { EMPTY, Observable, ObservableNotification, Subject, concatWith, dematerialize, finalize, firstValueFrom, ignoreElements, merge, mergeMap, of, switchMap, throwError } from "rxjs";
+import { Channel } from "./channel";
+import { Answer, Call, ID, Sender } from "./processing";
+import { CallOptions } from "./sender";
+import { ObservableAndPromise, generateId } from "./util";
 
-/*
 export interface ChannelSenderOptions extends CallOptions {
 
     readonly channel: Channel<ObservableNotification<Answer>, Call>
@@ -15,99 +13,28 @@ export interface ChannelSenderOptions extends CallOptions {
 
 export class ChannelSender implements Sender {
 
-    private readonly subscription
-    private readonly channel = new ReplaySubject<Connection<ObservableNotification<Answer>, Call>>
-
-    constructor(private readonly config: ChannelSenderOptions) {
-        this.subscription = config.channel.subscribe(this.channel)
-        /*
-        this.channel = config.channel.pipe(
-            share({
-                connector: () => new ReplaySubject(1),
-                resetOnRefCountZero: false,
-                resetOnComplete: false,
-                resetOnError: true,
-            })
-        )
-    }
-
-    close() {
-        this.subscription.unsubscribe()
-        this.channel.complete()
-    }
-
-}
-*/
-
-export interface VolatileChannelSenderOptions extends CallOptions {
-
-    readonly channel: ChannelFactory<ObservableNotification<Answer>, Call>
-
-}
-
-export class VolatileChannelSender implements Sender {
-
-    private readonly closed
+    private readonly closed = new Subject<void>()
     private readonly channel
 
-    constructor(private readonly config: VolatileChannelSenderOptions) {
-        this.closed = new BehaviorSubject<boolean>(false)
-        /* this.channel = config.channel.pipe(
-             share({
-                 connector: () => new ReplaySubject(1),
-                 resetOnRefCountZero: false,
-                 resetOnComplete: false,
-                 resetOnError: true,
-             })
-         )*/
-        this.channel = this.closed.pipe(
-            switchMap(closed => {
-                if (closed) {
-                    return throwError(() => new Error("This remote is closed."))
-                }
-                return config.channel
-            }),
-            share({
-                connector: () => new ReplaySubject(1),
-                resetOnRefCountZero: false,
-                resetOnComplete: false,
-                resetOnError: true,
-            })
-        )
+    constructor(private readonly config: ChannelSenderOptions) {
+        this.channel = config.channel()
     }
 
-    watch(autoReconnect = true) {
-        return this.channel.pipe(
-            withVolatility(autoReconnect, this.config.connectionTimeout),
-            map(channel => {
-                return new VolatileChannelSender({ ...this.config, channel: of(channel) })
-            })
-        )
-    }
     close() {
-        //TODO complete
-        this.closed.next(true)
-    }
-    withOptions(options: CallOptions) {
-        return new VolatileChannelSender({ ...this.config, ...options, channel: this.channel })
+        this.closed.complete()
+        this.channel.close?.()
     }
 
     call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
-        const observable = this.channel.pipe(
-            withVolatility(this.config.autoRetryObservables ?? true, this.config.connectionTimeout),
-            switchMap(_ => _),
+        const channel = merge(
+            of(this.channel),
+            this.closed.pipe(concatWith(throwError(() => new Error("This remote is closed.")))).pipe(ignoreElements())
+        )
+        const observable = channel.pipe(
             switchMap(connection => {
-                const id = generateId()
-                connection.next({
-                    kind: "S",
-                    id,
-                    command,
-                    data
-                })
-                return connection.pipe(
+                const id = this.config.generateId?.() ?? generateId()
+                const observable = connection.pipe(
                     finalize(() => {
-                        //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
-                        //if the channel closes, this fails - its not necessary in that case
                         connection.next({
                             kind: "U",
                             id
@@ -116,21 +43,30 @@ export class VolatileChannelSender implements Sender {
                     dematerialize(),
                     answer(id, command),
                 )
+                connection.next({
+                    kind: "S",
+                    id,
+                    command,
+                    data,
+                })
+                return observable
             })
         )
         const promise = PLazy.from(async () => {
-            return await firstValueFrom(this.channel.pipe(
-                withVolatility(this.config.autoRetryPromises ?? false, this.config.connectionTimeout),
-                switchMap(_ => _),
+            return await firstValueFrom(channel.pipe(
                 switchMap(connection => {
-                    const id = generateId()
+                    const id = this.config.generateId?.() ?? generateId()
+                    const observable = connection.pipe(
+                        dematerialize(),
+                        answer(id, command),
+                    )
                     connection.next({
-                        kind: "X",
+                        kind: "X" as const,
                         id,
                         command,
                         data
                     })
-                    return connection.pipe(dematerialize(), answer(id, command, this.config.promiseTimeout))
+                    return observable
                 })
             ))
         })
@@ -139,22 +75,52 @@ export class VolatileChannelSender implements Sender {
 
 }
 
-function answer(id: ID, command: string, timeoutMs?: number | undefined) {
+function answer(id: ID, command: string, ackTimeout?: number | undefined) {
     return (observable: Observable<Answer>) => {
         return observable.pipe(
-            filter(response => response.id === id),
-            dematerialize(),
-            optional((() => {
-                if (timeoutMs !== undefined) {
-                    const timeoutMessage = "The remote call to \"" + command + "\" has timed out after " + timeoutMs.toLocaleString() + "ms."
-                    return timeout({
-                        first: timeoutMs,
-                        with: () => {
-                            return throwError(() => new RemoteError("timeout", timeoutMessage))
-                        }
-                    })
+            mergeMap(answer => {
+                if (answer.id === id) {
+                    return of(answer)
                 }
-            })())
+                return EMPTY
+            }),
+            dematerialize(),
         )
+        /*
+        return merge(
+            observable.pipe(
+                mergeMap(answer => {
+                        if (answer.id === id) {
+                            return of(answer.response)
+                        }
+                    return EMPTY
+                }),
+                dematerialize(),
+            ),
+            (() => {
+                if (ackTimeout !== undefined) {
+                    return observable.pipe(
+                        mergeMap(answer => {
+                            if (answer.kind === "A") {
+                                if (answer.id === id) {
+                                    return of(void 0)
+                                }
+                            }
+                            return EMPTY
+                        }),
+                        timeout({
+                            first: ackTimeout,
+                            with: () => {
+                                return throwError(() => new RemoteError("timeout", "The remote call to \"" + command + "\" was not acknowledged within " + ackTimeout.toLocaleString() + "ms."))
+                            }
+                        }),
+                        ignoreElements()
+                    )
+                }
+                else {
+                    return EMPTY
+                }
+            })()
+        )*/
     }
 }

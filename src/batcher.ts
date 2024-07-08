@@ -6,7 +6,6 @@ export interface BatcherOptions {
 
     readonly debounceTime?: number | undefined
     readonly maxItems?: number | undefined
-    readonly atBegin?: boolean | undefined
 
 }
 
@@ -18,7 +17,7 @@ export class Batcher<T> {
     constructor(private readonly flush: (items: T[]) => void, private readonly options?: BatcherOptions) {
         const debounceTime = options?.debounceTime ?? DEFAULT_DEBOUNCE_TIME
         if (debounceTime > 0) {
-            this.process = debounce(debounceTime, this.forceProcess.bind(this), { atBegin: options?.atBegin ?? false })
+            this.process = debounce(debounceTime, this.forceProcess.bind(this))
         }
         else {
             this.process = this.forceProcess.bind(this)
