@@ -1,15 +1,196 @@
 
 import pDefer from "p-defer"
 import PLazy from "p-lazy"
-import { BehaviorSubject, EMPTY, Observable, ObservableNotification, ReplaySubject, catchError, combineLatest, concatWith, defer, dematerialize, filter, finalize, first, firstValueFrom, from, fromEvent, ignoreElements, map, materialize, merge, mergeMap, of, share, shareReplay, startWith, switchMap, takeUntil, tap, throwError } from "rxjs"
+import { BehaviorSubject, EMPTY, Observable, ObservableNotification, ReplaySubject, Subject, Subscription, catchError, combineLatest, concatWith, defer, dematerialize, filter, finalize, first, firstValueFrom, from, fromEvent, ignoreElements, map, materialize, merge, mergeMap, of, share, shareReplay, startWith, switchMap, takeUntil, tap, throwError } from "rxjs"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
 import { Channel, Connection } from "./channel"
-import { RemoteError } from "./error"
-import { Answer, Call, ID, Sender, Target } from "./processing"
-import { VolatileRemote, VolatileSenderRemote } from "./remote"
-import { CallOptions } from "./sender"
-import { ObservableAndPromise, RegistryAction, callOnTarget, closing, generateId, registry } from "./util"
+import { Allowed, ID, Proxied, Request, Target } from "./types"
+import { RemoteError } from "./util"
+import { ObservableAndPromise, generateId } from "./wrap"
+
+type Answer = ObservableNotification<ObservableNotification<unknown> & { readonly id: ID }>
+
+export interface ChannelSenderOptions {
+
+    readonly channel: Channel<ObservableNotification<Answer>, Request>
+
+}
+
+export class ChannelSender implements Sender {
+
+    private readonly closed = new Subject<void>()
+    private readonly channel
+
+    constructor(private readonly config: ChannelSenderOptions) {
+        this.channel = config.channel()
+    }
+
+    close() {
+        this.closed.complete()
+        this.channel.close()
+    }
+
+    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
+        const channel = merge(
+            of(this.channel),
+            this.closed.pipe(concatWith(throwError(() => new Error("This remote is closed.")))).pipe(ignoreElements())
+        )
+        const observable = channel.pipe(
+            switchMap(connection => {
+                const id = generateId()
+                const observable = connection.pipe(
+                    finalize(() => {
+                        connection.next({
+                            kind: "unsubscribe",
+                            id
+                        })
+                    }),
+                    dematerialize(),
+                    answer(id, command),
+                )
+                connection.next({
+                    kind: "subscribe",
+                    id,
+                    command,
+                    data,
+                })
+                return observable
+            })
+        )
+        const promise = PLazy.from(async () => {
+            return await firstValueFrom(channel.pipe(
+                switchMap(connection => {
+                    const id = generateId()
+                    const observable = connection.pipe(
+                        dematerialize(),
+                        answer(id, command),
+                    )
+                    connection.next({
+                        kind: "execute" as const,
+                        id,
+                        command,
+                        data
+                    })
+                    return observable
+                })
+            ))
+        })
+        return new ObservableAndPromise(observable, promise)
+    }
+
+}
+
+/*
+function answer(id: ID, command: string, ackTimeout?: number | undefined) {
+    return (observable: Observable<Answer>) => {
+        return observable.pipe(
+            mergeMap(answer => {
+                if (answer.id === id) {
+                    return of(answer)
+                }
+                return EMPTY
+            }),
+            dematerialize(),
+        )
+    }
+}
+*/
+
+export interface VolatileRemote<T extends Target> {
+
+    /**
+     * The proxied object.
+     */
+    readonly proxy: Proxied<T>
+
+    /**
+     * Watch for a new proxied object.
+     * @deprecated
+     * @param autoReconnect 
+     */
+    watch(autoReconnect?: boolean | undefined): Observable<Proxied<T>>
+
+    /**
+     * Close this channel.
+     */
+    close(): void
+
+}
+
+export interface VolatileSender extends Sender {
+
+    /**
+     * Watch this for individual senders when a new connection is made.
+     */
+    watch(autoReconnect?: boolean | undefined): Observable<Sender>
+
+}
+
+export interface Callable {
+
+    /**
+     * Call a command on the remote.
+     * @param command Command name.
+     * @param data Arguments in an array.
+     */
+    call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown>
+
+}
+
+/**
+ * The frontend object that translates calls to messages and sends them over a connection.
+ */
+export interface Sender extends Callable {
+
+    /**
+     * Close this sender and disconnect from the remote.
+     */
+    close(): void
+
+}
+
+export class VolatileSenderRemote<T extends Target> implements VolatileRemote<T> {
+
+    readonly proxy
+
+    constructor(private readonly sender: VolatileSender) {
+        this.proxy = oldProxy<T>(this.sender)
+    }
+
+    watch(autoReconnect?: boolean | undefined) {
+        return this.sender.watch(autoReconnect).pipe(map(sender => oldProxy<T>(sender)))
+    }
+    close() {
+        return this.sender.close()
+    }
+
+}
+
+export function oldProxy<T extends Target>(sender: Callable) {
+    return new Proxy(sender, {
+        get(target, key) {
+            if (typeof key === "symbol") {
+                throw new Error("No symbol calls on a proxy.")
+            }
+            return (...args: unknown[]) => target.call(key, ...args)
+        }
+    }) as unknown as Proxied<T>
+}
+
+/**
+ * A deferred observable that performs a cleanup action on unsubscribe.
+ * @deprecated
+ */
+export function closing<T>(factory: () => T, close: (value: T) => void) {
+    return new Observable<T>(subscriber => {
+        const value = factory()
+        subscriber.next(value)
+        return () => {
+            close(value)
+        }
+    })
+}
 
 namespace OldChannel {
 
@@ -21,9 +202,9 @@ namespace OldChannel {
     export function oldPort<I = never, O = unknown>(open: Observable<Channel.Port<I, O>>): OldChannel<I, O> {
         return new Observable<Connection<I, O>>(subscriber => {
             const subscription = open.subscribe(object => {
-                subscriber.next(Channel.from(
-                    fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
-                    value => {
+                subscriber.next(Connection.from({
+                    observable: fromEvent<MessageEvent<I>>(object, "message").pipe(map(_ => _.data)),
+                    next: value => {
                         try {
                             object.postMessage(value)
                         }
@@ -32,8 +213,8 @@ namespace OldChannel {
                             subscriber.error(e)
                         }
                     },
-                    () => void 0,
-                ))
+                    close: () => void 0,
+                }))
             })
             return () => {
                 subscription.unsubscribe()
@@ -61,7 +242,7 @@ namespace OldChannel {
      * Creates a channel from a two broadcast channels, one for input and one for output.
      */
     export function oldDualBroadcast<I, O>(input: string, output: string): OldChannel<I, O> {
-        return combineLatest([oldBroadcast<I>(input), oldBroadcast<O>(output)]).pipe(map(([a, b]) => Channel.from(a, b)))
+        return combineLatest([oldBroadcast<I>(input), oldBroadcast<O>(output)]).pipe(map(([a, b]) => Connection.from({ observable: a, next: b.next.bind(b), close: b.close })))
     }
 
     /**
@@ -74,7 +255,7 @@ namespace OldChannel {
     export function unbatching<I, O>(channel: OldChannel<readonly I[], readonly O[]>) {
         return channel.pipe(
             map(connection => {
-                return Channel.from<I, O>(connection.pipe(mergeMap(items => items)), value => connection.next([value]))
+                return Connection.from<I, O>({ observable: connection.pipe(mergeMap(items => items)), next: value => connection.next([value]), close: () => void 0 })
             })
         )
     }
@@ -86,17 +267,18 @@ namespace OldChannel {
         return channel.pipe(
             map(connection => {
                 const batcher = new Batcher<O>(connection.next.bind(connection), options)
-                return Channel.from<I, O>(
-                    connection.pipe(mergeMap(items => items)),
-                    batcher.add.bind(batcher)
-                )
+                return Connection.from<I, O>({
+                    observable: connection.pipe(mergeMap(items => items)),
+                    next: batcher.add.bind(batcher),
+                    close: () => void 0,
+                })
             })
         )
     }
 }
 
-export type Finder = ChannelFactory<ObservableNotification<Answer>, Call>
-export type Advertiser = Observable<RegistryAction<string, Connection<Call, ObservableNotification<Answer>>>>
+export type Finder = ChannelFactory<ObservableNotification<Answer>, Request>
+export type Advertiser = Observable<RegistryAction<string, Connection<Request, ObservableNotification<Answer>>>>
 
 export const DEFAULT_CONTEXT = "default"
 
@@ -104,6 +286,61 @@ export interface BroadcastCoordinatorOptions {
 
     readonly context?: string
 
+}
+
+export type RegistryAction<K, V> = {
+
+    readonly action: "add"
+    readonly key: K
+    readonly observable: Observable<V>
+
+} | {
+
+    readonly action: "delete"
+    readonly key: K
+
+} | {
+
+    readonly action: "clear"
+
+}
+
+/**
+ * An observable that combines other observables, but also allows removing them.
+ */
+export function registry<K, V>(observable: Observable<RegistryAction<K, V>>) {
+    const observables = new Map<K, Subscription>()
+    return observable.pipe(
+        mergeMap(action => {
+            if (action.action === "add") {
+                return new Observable<readonly [V, K]>(subscriber => {
+                    const subscription = action.observable.pipe(map(value => [value, action.key] as const)).subscribe(subscriber)
+                    observables.set(action.key, subscription)
+                    return () => {
+                        subscription.unsubscribe()
+                        observables.delete(action.key)
+                    }
+                })
+            }
+            else if (action.action === "clear") {
+                observables.forEach(subscription => {
+                    subscription.unsubscribe()
+                })
+                return EMPTY
+            }
+            else {
+                const observable = observables.get(action.key)
+                if (observable !== undefined) {
+                    observable.unsubscribe()
+                }
+                return EMPTY
+            }
+        }),
+        finalize(() => {
+            observables.forEach(observable => observable.unsubscribe())
+            observables.clear()
+        }),
+    )
 }
 
 export function broadcastFinder(options: BroadcastCoordinatorOptions = {}) {
@@ -176,7 +413,7 @@ function buildBroadcastAdvertiser(context: string, createBroadcastChannel: Broad
                                     of({
                                         action: "add" as const,
                                         key: message.clientId,
-                                        observable: createBroadcastChannel<Call, ObservableNotification<Answer>>(message.callChannelId, message.answerChannelId)
+                                        observable: createBroadcastChannel<Request, ObservableNotification<Answer>>(message.callChannelId, message.answerChannelId)
                                     }),
                                     from(lock).pipe(
                                         map(() => {
@@ -196,7 +433,7 @@ function buildBroadcastAdvertiser(context: string, createBroadcastChannel: Broad
     )
 }
 
-function buildBroadcastFinder(context: string, createBroadcastChannel: BroadcastChannelCreator): ChannelFactory<ObservableNotification<Answer>, Call> {
+function buildBroadcastFinder(context: string, createBroadcastChannel: BroadcastChannelCreator): ChannelFactory<ObservableNotification<Answer>, Request> {
     return OldChannel.oldBroadcast<LookupMessage>(context).pipe(
         switchMap(lookup => {
             lookup.next({
@@ -231,7 +468,7 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
                                         filter(message => message.type === "clientRegistered" && message.clientId === clientId),
                                         first(),
                                         map(() => {
-                                            return createBroadcastChannel<ObservableNotification<Answer>, Call>(answerChannelId, callChannelId).pipe(
+                                            return createBroadcastChannel<ObservableNotification<Answer>, Request>(answerChannelId, callChannelId).pipe(
                                                 takeUntil(waitForLock(server.lockId)),
                                                 shareReplay(1)
                                                 //TODO adding this fixed a bug where responses would get duplicated 50+ times
@@ -345,9 +582,9 @@ export function observeRandomWebLock(tag: string = "") {
     })
 }
 
-export interface VolatileChannelSenderOptions extends CallOptions {
+export interface VolatileChannelSenderOptions {
 
-    readonly channel: ChannelFactory<ObservableNotification<Answer>, Call>
+    readonly channel: ChannelFactory<ObservableNotification<Answer>, Request>
 
 }
 
@@ -410,18 +647,18 @@ export class VolatileChannelSender implements Sender {
         this.closed.next(true)
         this.closed.complete()
     }
-    withOptions(options: CallOptions) {
+    withOptions(options: {}) {
         return new VolatileChannelSender({ ...this.config, ...options, channel: this.channel })
     }
 
     call(command: string, ...data: readonly unknown[]): ObservableAndPromise<unknown> {
         const observable = this.channel.pipe(
-            withVolatility(this.config.autoRetryObservables ?? true),
+            withVolatility(true),
             switchMap(_ => _),
             switchMap(connection => {
                 const id = generateId()
                 const send = {
-                    kind: "S" as const,
+                    kind: "subscribe" as const,
                     id,
                     command,
                     data,
@@ -432,30 +669,30 @@ export class VolatileChannelSender implements Sender {
                         //TODO how do we make it so this only issues if the inner observable is unsubscribed from directly?
                         //if the channel closes, this fails - its not necessary in that case
                         connection.next({
-                            kind: "U",
+                            kind: "unsubscribe",
                             id
                         })
                     }),
                     dematerialize(),
-                    answer(id, command, this.config.acknowledgementTimeout),
+                    answer(id, command, 10000000),
                 )
             })
         )
         const promise = PLazy.from(async () => {
             return await firstValueFrom(this.channel.pipe(
-                withVolatility(this.config.autoRetryPromises ?? false),
+                withVolatility(false),
                 switchMap(_ => _),
                 switchMap(connection => {
                     const id = generateId()
                     const send = {
-                        kind: "X" as const,
+                        kind: "execute" as const,
                         id,
                         command,
                         data
                     }
                     const observable = connection.pipe(
                         dematerialize(),
-                        answer(id, command, this.config.acknowledgementTimeout)
+                        answer(id, command, 10000000)
                     )
                     connection.next(send)
                     return observable
@@ -470,6 +707,7 @@ export class VolatileChannelSender implements Sender {
 function answer(id: ID, command: string, ackTimeout?: number | undefined) {
     return (observable: Observable<Answer>) => {
         return observable.pipe(
+            dematerialize(),
             mergeMap(answer => {
                 if (answer.id === id) {
                     return of(answer)
@@ -544,7 +782,7 @@ export function exposeMigrating<T extends Target>(config: ExposeMigratingConfig<
     )).subscribe()
 }
 
-export interface WrapMigratingConfig extends CallOptions {
+export interface WrapMigratingConfig {
 
     readonly finder: Finder
 
@@ -553,11 +791,6 @@ export interface WrapMigratingConfig extends CallOptions {
 export function wrapMigrating<T extends Target>(config: WrapMigratingConfig) {
     return wrapVolatile<T>({
         channel: config.finder,
-        acknowledgementTimeout: config.acknowledgementTimeout,
-        connectionTimeout: config.connectionTimeout,
-        autoRetryPromises: config.autoRetryPromises,
-        autoRetryObservables: config.autoRetryObservables,
-        promiseTimeout: config.promiseTimeout,
     })
 }
 
@@ -572,7 +805,7 @@ export function wrapVolatile<T extends Target>(options: WrapVolatileOptions): Vo
 interface ExposeConfig<T extends Target> {
 
     readonly target: T
-    readonly channel: OldChannel<Call, ObservableNotification<Answer>>
+    readonly channel: OldChannel<Request, ObservableNotification<Answer>>
 
 }
 
@@ -580,39 +813,39 @@ function expose<T extends Target>(config: ExposeConfig<T>) {
     const subscription = config.channel.pipe(
         switchMap(connection => {
             return connection.pipe(
-                mergeMap(call => {
-                    if (call.kind === "U") {
+                mergeMap(req => {
+                    if (req.kind === "unsubscribe") {
                         return of({
                             action: "delete" as const,
-                            key: call.id
+                            key: req.id
                         })
                     }
                     else {
                         const observable = defer(() => {
-                            const input = callOnTarget(config.target, call.command, call.data)
-                            if (call.kind === "S") {
-                                if (input.observable === undefined) {
+                            const input = call(config.target, req.command, req.data)
+                            if (req.kind === "subscribe") {
+                                if (typeof input === "function") {
                                     throw new RemoteError("invalid-message", "Trying to treat a promise as an observable.")
                                 }
                                 else {
-                                    return input.observable
+                                    return input
                                 }
                             }
                             else {
-                                if (input.promise === undefined) {
+                                if (typeof input === "object") {
                                     throw new RemoteError("invalid-message", "Trying to treat an observable as a promise.")
                                 }
                                 else {
-                                    return defer(input.promise)
+                                    return defer(input)
                                 }
                             }
                         })
                         return of({
                             action: "add" as const,
-                            key: call.id,
+                            key: req.id,
                             observable: observable.pipe(
                                 catchError(error => {
-                                    return throwError(() => new RemoteError("call-failed", "Remote call to \"" + call.command + "\" failed.", { cause: error }))
+                                    return throwError(() => new RemoteError("call-failed", "Remote call to \"" + req.command + "\" failed.", { cause: error }))
                                 }),
                                 materialize(),
                             )
@@ -620,10 +853,13 @@ function expose<T extends Target>(config: ExposeConfig<T>) {
                     }
                 }),
                 registry,
-                map(([id, answer]) => {
+                map(([answer, id]) => {
                     return {
-                        id,
-                        ...answer,
+                        kind: "N" as const,
+                        value: {
+                            id,
+                            ...answer,
+                        }
                     }
                 }),
                 materialize(),
@@ -635,5 +871,24 @@ function expose<T extends Target>(config: ExposeConfig<T>) {
     ).subscribe(() => void 0)
     return () => {
         subscription.unsubscribe()
+    }
+}
+
+function call<T extends Target>(target: T, command: string | number | symbol, data: readonly unknown[]): Observable<unknown> | (() => Promise<unknown>) {
+    if (!(command in target)) {
+        throw new Error("Command " + command.toString() + " does not exist.")
+    }
+    const property = target[command as keyof T]
+    const returned = (() => {
+        if (typeof property === "function") {
+            return property.call(target, ...data) as Allowed
+        }
+        return property as Allowed
+    })()
+    if (returned instanceof Observable) {
+        return returned
+    }
+    else {
+        return async () => await returned
     }
 }

@@ -1,25 +1,12 @@
-import { Observable, Observer, fromEvent, map, mergeMap, tap } from "rxjs"
+import { NextObserver, Observable, fromEvent, map, mergeMap, tap } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
-import { HasPostMessage, Next, ObservableAndObserver } from "./util"
-
-export const DEFAULT_CONNECTION_TIMEOUT = 10000 //TODO why do we hit this when its syncing? should not be that backed up
 
 /**
  * A channel creates Connection objects.
  */
 export type Channel<I, O> = () => Connection<I, O>
-
-/**
- * A connection sends and receives messages.
- */
-export interface Connection<I, O> extends Observable<I>, Pick<Observer<O>, "next"> {
-
-    //TODO change - also all references
-    close?: (() => void) | undefined
-
-}
 
 export namespace Channel {
 
@@ -35,53 +22,80 @@ export namespace Channel {
         return () => {
             const connection = channel()
             const batcher = new Batcher<O>(connection.next.bind(connection), options)
-            return from<I, O>(
-                connection.pipe(mergeMap(items => items)),
-                batcher.add.bind(batcher),
-                connection.close,
-            )
+            return Connection.from<I, O>({
+                observable: connection.pipe(mergeMap(items => items)),
+                next: batcher.add.bind(batcher),
+                close: connection.close,
+            })
         }
     }
 
     export function logging<I, O>(channel: Channel<I, O>, name: string = "Untitled") {
         return () => {
             const connection = channel()
-            return from<I, O>(
-                connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
-                value => {
+            return Connection.from<I, O>({
+                observable: connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
+                next: value => {
                     console.log("Sending emission on channel " + name + ".", value)
                     connection.next(value)
                 },
-                connection.close,
-            )
+                close: connection.close,
+            })
         }
     }
 
+    /**
+     * A broadcast channel.
+     * @param name The name of the channel.
+     * @returns A channel.
+     */
     export function broadcast<I, O>(name: string): Channel<I, O> {
-        return port(() => new BroadcastChannel(name), channel => () => channel.close())
+        return port(() => new BroadcastChannel(name), channel => channel.close())
     }
 
     /**
      * A two way port.
      */
-    export type Port<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & HasPostMessage<O>
+    export type Port<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & { postMessage(value: O): void }
 
     export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined) {
         return () => {
             const connection = callOrGet(open)
-            return from(
-                fromEvent<MessageEvent<I>>(connection, "message").pipe(map(_ => _.data)),
-                connection.postMessage.bind(connection),
-                () => close?.(connection),
-            )
+            return Connection.from({
+                observable: fromEvent(connection, "message").pipe(map(event => event.data)),
+                next: connection.postMessage.bind(connection),
+                close: () => close?.(connection),
+            })
         }
+    }
+
+}
+
+interface From<I, O> {
+
+    readonly observable: Observable<I>
+    next(value: O): void
+    close(): void
+
+}
+
+export class Connection<I, O> extends Observable<I> {
+
+    constructor(observable: Observable<I>, private readonly observer: (value: O) => void, readonly close: () => void = () => void 0) {
+        super(subscriber => {
+            return observable.subscribe(subscriber)
+        })
+    }
+
+    next(value: O) {
+        return this.observer(value)
     }
 
     /**
      * Combine and observable and observer into a channel.
      */
-    export function from<I, O>(observable: Observable<I>, next: Next<O>, close?: () => void): Connection<I, O> {
-        return new ObservableAndObserver(observable, next, close)
+    static from<I, O>(from: From<I, O>): Connection<I, O> {
+        return new Connection(from.observable, from.next, from.close)
     }
 
 }
