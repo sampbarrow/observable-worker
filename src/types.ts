@@ -1,5 +1,5 @@
 
-import { Observable } from "rxjs"
+import { CompleteNotification, ErrorNotification, NextNotification, Observable } from "rxjs"
 
 export type Target = object
 export type ID = string | number
@@ -8,7 +8,8 @@ export type Allowed = Observable<unknown> | PromiseLike<unknown> | Primitive
 export type Remoted<T> = T extends Observable<infer R> ? Observable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
 export type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : readonly void[]
 export type Output<T> = T extends ((...args: any) => Allowed) ? Remoted<ReturnType<T>> : Remoted<T>
-export type Members<T extends Target> = { [K in string & keyof T as T[K] extends Allowed | ((...args: any) => Allowed) ? K : never]: T[K] }
+export type Members<T extends Target> = { [K in string & keyof T as T[K] extends Member ? K : never]: T[K] }
+export type Member = Allowed | ((...args: any) => Allowed)
 
 export type Proxied<T extends Target> = {
 
@@ -16,18 +17,9 @@ export type Proxied<T extends Target> = {
 
 }
 
-export interface ExecuteRequest {
-
-    readonly kind: "execute"
-    readonly id: ID
-    readonly command: string | number
-    readonly data: readonly unknown[]
-
-}
-
 export interface SubscribeRequest {
 
-    readonly kind: "subscribe"
+    readonly kind: "S"
     readonly id: ID
     readonly command: string | number
     readonly data: readonly unknown[]
@@ -36,50 +28,29 @@ export interface SubscribeRequest {
 
 export interface UnsubscribeRequest {
 
-    readonly kind: "unsubscribe"
+    readonly kind: "U"
     readonly id: ID
 
 }
 
-export interface FulfilledResponse {
+export interface NextResponse extends NextNotification<unknown> {
 
-    readonly kind: "fulfilled"
-    readonly id: ID
-    readonly value: unknown
-
-}
-
-export interface RejectedResponse {
-
-    readonly kind: "rejected"
-    readonly id: ID
-    readonly error: unknown
-
-}
-
-export interface NextResponse {
-
-    readonly kind: "next"
-    readonly id: ID
-    readonly value: unknown
-
-}
-
-export interface ErrorResponse {
-
-    readonly kind: "error"
-    readonly id: ID
-    readonly error: unknown
-
-}
-
-export interface CompleteResponse {
-
-    readonly kind: "complete"
     readonly id: ID
 
 }
 
-export type Request = ExecuteRequest | SubscribeRequest | UnsubscribeRequest
+export interface ErrorResponse extends ErrorNotification {
 
-export type Response = FulfilledResponse | RejectedResponse | NextResponse | ErrorResponse | CompleteResponse
+    readonly id: ID
+
+}
+
+export interface CompleteResponse extends CompleteNotification {
+
+    readonly id: ID
+
+}
+
+export type Request = SubscribeRequest | UnsubscribeRequest
+
+export type Response = NextResponse | ErrorResponse | CompleteResponse

@@ -2,13 +2,131 @@
 import pDefer from "p-defer"
 import PLazy from "p-lazy"
 import { BehaviorSubject, EMPTY, Observable, ObservableNotification, ReplaySubject, Subject, Subscription, catchError, combineLatest, concatWith, defer, dematerialize, filter, finalize, first, firstValueFrom, from, fromEvent, ignoreElements, map, materialize, merge, mergeMap, of, share, shareReplay, startWith, switchMap, takeUntil, tap, throwError } from "rxjs"
+import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
-import { Channel, Connection } from "./channel"
-import { Allowed, ID, Proxied, Request, Target } from "./types"
-import { RemoteError } from "./util"
 import { ObservableAndPromise, generateId } from "./wrap"
 
+/**
+ * A channel creates Connection objects.
+ */
+type Channel<I, O> = () => Connection<I, O>
+
+namespace Channel {
+
+    /**
+     * A pre-created channel from this window's globalThis.
+     */
+    export const SELF = port(globalThis)
+
+    /**
+     * Wraps another channel and batches any messages sent to it. Also treats incoming messages as batches.
+     */
+    export function batching<I, O>(channel: Channel<readonly I[], readonly O[]>, options?: BatcherOptions<any> | undefined) {
+        return () => {
+            const connection = channel()
+            const batcher = new Batcher<O>(connection.next.bind(connection), options)
+            return Connection.from<I, O>({
+                observable: connection.pipe(mergeMap(items => items)),
+                next: batcher.add.bind(batcher),
+                close: () => {
+                    batcher.process()
+                    connection.close()
+                }
+            })
+        }
+    }
+
+    export function logging<I, O>(channel: Channel<I, O>, name: string = "Untitled") {
+        return () => {
+            const connection = channel()
+            return Connection.from<I, O>({
+                observable: connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
+                next: value => {
+                    console.log("Sending emission on channel " + name + ".", value)
+                    connection.next(value)
+                },
+                close: connection.close,
+            })
+        }
+    }
+
+    /**
+     * A broadcast channel.
+     * @param name The name of the channel.
+     * @returns A channel.
+     */
+    export function broadcast<I, O>(name: string): Channel<I, O> {
+        return port(() => new BroadcastChannel(name), channel => channel.close())
+    }
+
+    /**
+     * A two way port.
+     */
+    export type Port<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & { postMessage(value: O): void }
+
+    /**
+     * TODO closing is weird
+     * if we want to just close the sender, we have to leave the channel open so we can unsubscribe from everything
+     * 
+     */
+    export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined) {
+        return () => {
+            const connection = callOrGet(open)
+            const closed = new BehaviorSubject(false)
+            return Connection.from<I, O>({
+                observable: fromEvent(connection, "message").pipe(map(event => event.data), takeUntil(closed.pipe(filter(closed => closed)))),
+                next: value => {
+                    if (closed.getValue()) {
+                        throw new Error("This channel is closed.")
+                    }
+                    connection.postMessage(value)
+                },
+                close: () => {
+                    closed.next(true)
+                    closed.complete()
+                    if (close !== undefined) {
+                        close(connection)
+                    }
+                }
+            })
+        }
+    }
+
+}
+
+namespace Connection {
+
+    export interface From<I, O> {
+
+        readonly observable: Observable<I>
+        next(value: O): void
+        close(): void
+
+    }
+
+}
+
+class Connection<I, O> extends Observable<I> {
+
+    constructor(observable: Observable<I>, private readonly observer: (value: O) => void, readonly close: () => void = () => void 0) {
+        super(subscriber => {
+            return observable.subscribe(subscriber)
+        })
+    }
+
+    next(value: O) {
+        return this.observer(value)
+    }
+
+    /**
+     * Combine and observable and observer into a channel.
+     */
+    static from<I, O>(from: Connection.From<I, O>): Connection<I, O> {
+        return new Connection(from.observable, from.next, from.close)
+    }
+
+}
 type Answer = ObservableNotification<ObservableNotification<unknown> & { readonly id: ID }>
 
 export interface ChannelSenderOptions {
@@ -263,7 +381,7 @@ namespace OldChannel {
     /**
      * Wraps another channel and batches any messages sent to it. Also treats incoming messages as batches.
      */
-    export function batchingOld<I, O>(channel: OldChannel<readonly I[], readonly O[]>, options?: BatcherOptions | undefined) {
+    export function batchingOld<I, O>(channel: OldChannel<readonly I[], readonly O[]>, options?: BatcherOptions<any> | undefined) {
         return channel.pipe(
             map(connection => {
                 const batcher = new Batcher<O>(connection.next.bind(connection), options)
@@ -353,7 +471,7 @@ export function broadcastAdvertiser(options: BroadcastCoordinatorOptions = {}) {
 export interface BroadcastCoordinatorBatchingOptions {
 
     readonly context?: string | undefined
-    readonly batcher?: BatcherOptions | undefined
+    readonly batcher?: BatcherOptions<any> | undefined
 
 }
 
@@ -892,3 +1010,105 @@ function call<T extends Target>(target: T, command: string | number | symbol, da
         return async () => await returned
     }
 }
+
+type Target = object
+type ID = string | number
+type Primitive = string | number | boolean | null | undefined | void | bigint | { readonly [k: string]: Primitive } | readonly Primitive[]
+type Allowed = Observable<unknown> | PromiseLike<unknown> | Primitive
+type Remoted<T> = T extends Observable<infer R> ? Observable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
+type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : readonly void[]
+type Output<T> = T extends ((...args: any) => Allowed) ? Remoted<ReturnType<T>> : Remoted<T>
+type Members<T extends Target> = { [K in string & keyof T as T[K] extends Allowed | ((...args: any) => Allowed) ? K : never]: T[K] }
+
+type Proxied<T extends Target> = {
+
+    readonly [K in keyof Members<T>]: (...input: Input<Members<T>[K]>) => Output<Members<T>[K]>
+
+}
+
+
+/**
+ * Types for remote errors.
+ */
+type RemoteErrorCode = "worker-disappeared" | "invalid-message" | "call-failed"
+
+//TODO evaluate these, which do we need?
+
+/**
+ * A special error with a retryable property, used when a migrating worker dies.
+ */
+class RemoteError extends Error {
+
+    constructor(readonly code: RemoteErrorCode, message: string, options?: ErrorOptions) {
+        super(message, options)
+    }
+
+}
+
+interface ExecuteRequest {
+
+    readonly kind: "execute"
+    readonly id: ID
+    readonly command: string | number
+    readonly data: readonly unknown[]
+
+}
+
+interface SubscribeRequest {
+
+    readonly kind: "subscribe"
+    readonly id: ID
+    readonly command: string | number
+    readonly data: readonly unknown[]
+
+}
+
+interface UnsubscribeRequest {
+
+    readonly kind: "unsubscribe"
+    readonly id: ID
+
+}
+
+interface FulfilledResponse {
+
+    readonly kind: "fulfilled"
+    readonly id: ID
+    readonly value: unknown
+
+}
+
+interface RejectedResponse {
+
+    readonly kind: "rejected"
+    readonly id: ID
+    readonly error: unknown
+
+}
+
+interface NextResponse {
+
+    readonly kind: "next"
+    readonly id: ID
+    readonly value: unknown
+
+}
+
+interface ErrorResponse {
+
+    readonly kind: "error"
+    readonly id: ID
+    readonly error: unknown
+
+}
+
+interface CompleteResponse {
+
+    readonly kind: "complete"
+    readonly id: ID
+
+}
+
+type Request = ExecuteRequest | SubscribeRequest | UnsubscribeRequest
+
+type Response = FulfilledResponse | RejectedResponse | NextResponse | ErrorResponse | CompleteResponse

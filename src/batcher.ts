@@ -2,39 +2,42 @@ import { debounce } from "throttle-debounce";
 
 const DEFAULT_DEBOUNCE_TIME = 1
 
-export interface BatcherOptions {
+export interface BatcherOptions<T> {
 
     readonly debounceTime?: number | undefined
-    readonly maxItems?: number | undefined
+    readonly flushTest?: ((items: readonly T[]) => boolean) | undefined
 
 }
 
 export class Batcher<T> {
 
-    private readonly process
+    private readonly debounced
     private readonly items = new Array<T>()
 
-    constructor(private readonly flush: (items: T[]) => void, private readonly options?: BatcherOptions) {
+    constructor(private readonly flush: (items: T[]) => void, private readonly options?: BatcherOptions<T>) {
         const debounceTime = options?.debounceTime ?? DEFAULT_DEBOUNCE_TIME
         if (debounceTime > 0) {
-            this.process = debounce(debounceTime, this.forceProcess.bind(this))
+            this.debounced = debounce(debounceTime, this.process.bind(this))
         }
         else {
-            this.process = this.forceProcess.bind(this)
+            this.debounced = this.process.bind(this)
         }
     }
 
-    private forceProcess() {
-        this.flush(this.items.splice(0))
+    process() {
+        const items = this.items.splice(0)
+        if (items.length > 0) {
+            this.flush(items)
+        }
     }
 
     add(item: T) {
         this.items.push(item)
-        if (this.options?.maxItems !== undefined && this.items.length >= this.options?.maxItems) {
-            this.forceProcess()
+        if (this.options?.flushTest?.(this.items) ?? false) {
+            this.process()
         }
         else {
-            this.process()
+            this.debounced()
         }
     }
 

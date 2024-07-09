@@ -1,7 +1,31 @@
-import { NextObserver, Observable, fromEvent, map, mergeMap, tap } from "rxjs"
+
+import { BehaviorSubject, Observable, filter, fromEvent, map, mergeMap, switchMap, takeUntil, tap, throwError } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
+
+/**
+ * A connection is used to send and receive messages.
+ */
+export interface Connection<I, O> {
+
+    /**
+     * An observable for listening to this connection.
+     */
+    readonly observe: Observable<I>
+
+    /**
+     * Send a message over this connection.
+     * @param message The message.
+     */
+    send(message: O): void
+
+    /**
+     * Close this connection.
+     */
+    close(): void
+
+}
 
 /**
  * A channel creates Connection objects.
@@ -18,29 +42,32 @@ export namespace Channel {
     /**
      * Wraps another channel and batches any messages sent to it. Also treats incoming messages as batches.
      */
-    export function batching<I, O>(channel: Channel<readonly I[], readonly O[]>, options?: BatcherOptions | undefined) {
+    export function batching<I, O>(channel: Channel<readonly I[], readonly O[]>, options?: BatcherOptions<O> | undefined): Channel<I, O> {
         return () => {
             const connection = channel()
-            const batcher = new Batcher<O>(connection.next.bind(connection), options)
-            return Connection.from<I, O>({
-                observable: connection.pipe(mergeMap(items => items)),
-                next: batcher.add.bind(batcher),
-                close: connection.close,
-            })
+            const batcher = new Batcher<O>(connection.send.bind(connection), options)
+            return {
+                observe: connection.observe.pipe(mergeMap(items => items)),
+                send: batcher.add.bind(batcher),
+                close: () => {
+                    batcher.process()
+                    connection.close()
+                }
+            }
         }
     }
 
-    export function logging<I, O>(channel: Channel<I, O>, name: string = "Untitled") {
+    export function logging<I, O>(channel: Channel<I, O>, name: string = "Untitled"): Channel<I, O> {
         return () => {
             const connection = channel()
-            return Connection.from<I, O>({
-                observable: connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
-                next: value => {
+            return {
+                observe: connection.observe.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
+                send: value => {
                     console.log("Sending emission on channel " + name + ".", value)
-                    connection.next(value)
+                    connection.send(value)
                 },
                 close: connection.close,
-            })
+            }
         }
     }
 
@@ -58,44 +85,30 @@ export namespace Channel {
      */
     export type Port<I, O> = HasEventTargetAddRemove<MessageEvent<I>> & { postMessage(value: O): void }
 
-    export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined) {
+    export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined): Channel<I, O> {
         return () => {
             const connection = callOrGet(open)
-            return Connection.from({
-                observable: fromEvent(connection, "message").pipe(map(event => event.data)),
-                next: connection.postMessage.bind(connection),
-                close: () => close?.(connection),
-            })
+            const closed = new BehaviorSubject(false)
+            return {
+                observe: fromEvent(connection, "message").pipe(map(event => event.data), takeUntil(closed.pipe(filter(closed => closed), switchMap(() => throwError(() => new Error("This channel is closed.")))))),
+                send: value => {
+                    if (closed.getValue()) {
+                        throw new Error("This channel is closed.")
+                    }
+                    connection.postMessage(value)
+                },
+                close: () => {
+                    if (closed.getValue()) {
+                        throw new Error("This channel is closed.")
+                    }
+                    closed.next(true)
+                    closed.complete()
+                    if (close !== undefined) {
+                        close(connection)
+                    }
+                }
+            }
         }
-    }
-
-}
-
-interface From<I, O> {
-
-    readonly observable: Observable<I>
-    next(value: O): void
-    close(): void
-
-}
-
-export class Connection<I, O> extends Observable<I> {
-
-    constructor(observable: Observable<I>, private readonly observer: (value: O) => void, readonly close: () => void = () => void 0) {
-        super(subscriber => {
-            return observable.subscribe(subscriber)
-        })
-    }
-
-    next(value: O) {
-        return this.observer(value)
-    }
-
-    /**
-     * Combine and observable and observer into a channel.
-     */
-    static from<I, O>(from: From<I, O>): Connection<I, O> {
-        return new Connection(from.observable, from.next, from.close)
     }
 
 }

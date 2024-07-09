@@ -1,9 +1,10 @@
 import { customAlphabet } from "nanoid"
 import PLazy from "p-lazy"
-import { Observable, Subject, concatWith, dematerialize, filter, finalize, ignoreElements, lastValueFrom, merge, mergeMap, of, switchMap, throwError } from "rxjs"
+import { Observable, Subject, concatWith, dematerialize, filter, firstValueFrom, share, takeUntil, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Proxied, Request, Response, Target } from "./types"
-import { RemoteError } from "./util"
+
+export const WORKER_CLOSE = Symbol()
 
 export interface Remote<T extends Target> {
 
@@ -26,108 +27,51 @@ export interface WrapOptions {
      */
     readonly channel: Channel<Response, Request>
 
-    /**
-     * A function to generate an ID.
-     */
-    readonly generateId?: (() => string) | undefined
-
 }
 
 export function wrap<T extends Target>(options: WrapOptions): Remote<T> {
     const closed = new Subject<void>()
     const connection = options.channel()
-    return {
-        proxy: proxy((command: string, ...data: readonly unknown[]) => {
-            const call = (kind: "subscribe" | "execute") => {
-                return merge(
-                    of(connection),
-                    closed.pipe(concatWith(throwError(() => new Error("This remote is closed.")))).pipe(ignoreElements())
-                ).pipe(
-                    switchMap(connection => {
-                        const id = options.generateId?.() ?? generateId()
-                        connection.next({
-                            kind,
-                            id,
-                            command,
-                            data,
-                        })
-                        const observable = connection.pipe(
-                            filter(message => message.id === id),
-                            mergeMap(message => {
-                                if (kind === "subscribe") {
-                                    if (message.kind === "next") {
-                                        return [
-                                            {
-                                                kind: "N" as const,
-                                                value: message.value,
-                                            }
-                                        ]
-                                    }
-                                    else if (message.kind === "error") {
-                                        return [
-                                            {
-                                                kind: "E" as const,
-                                                error: message.error,
-                                            }
-                                        ]
-                                    }
-                                    else if (message.kind === "complete") {
-                                        return [
-                                            {
-                                                kind: "C" as const
-                                            }
-                                        ]
-                                    }
-                                    else {
-                                        throw new RemoteError("invalid-message", "Trying to treat a promise as an observable.")
-                                    }
-                                }
-                                else {
-                                    if (message.kind === "fulfilled") {
-                                        return [
-                                            {
-                                                kind: "N" as const,
-                                                value: message.value,
-                                            }, {
-                                                kind: "C" as const
-                                            }
-                                        ]
-                                    }
-                                    else if (message.kind === "rejected") {
-                                        return [
-                                            {
-                                                kind: "E" as const,
-                                                error: message.kind
-                                            }, {
-                                                kind: "C" as const,
-                                            }
-                                        ]
-                                    }
-                                    else {
-                                        throw new RemoteError("invalid-message", "Trying to treat an observable as a promise.")
-                                    }
-                                }
-                            }),
-                            finalize(() => {
-                                if (kind === "subscribe") {
-                                    connection.next({
-                                        kind: "unsubscribe",
-                                        id
-                                    })
-                                }
-                            }),
-                        )
-                        return observable
-                    }),
-                    dematerialize(),
-                )
+    const proxy = new Proxy({}, {
+        get(_target, command) {
+            if (typeof command === "symbol") {
+                throw new Error("No symbol calls on a proxy.")
             }
-            return new ObservableAndPromise(call("subscribe"), PLazy.from(() => lastValueFrom(call("execute"))))
-        }),
-        close: () => {
-            closed.complete()
-            connection.close()
+            return (...data: readonly unknown[]) => {
+                const observable = new Observable<unknown>(subscriber => {
+                    const id = generateId()
+                    const observable = connection.observe.pipe(
+                        filter(response => response.id === id),
+                        dematerialize(),
+                        takeUntil(closed.pipe(concatWith(throwError(() => new Error("This remote is closed."))))),
+                    )
+                    const subscription = observable.subscribe(subscriber)
+                    connection.send({
+                        kind: "S",
+                        id,
+                        command,
+                        data,
+                    })
+                    return () => {
+                        subscription.unsubscribe()
+                        connection.send({
+                            kind: "U",
+                            id
+                        })
+                    }
+                })
+                const shared = observable.pipe(share())
+                return new ObservableAndPromise(shared, PLazy.from(() => firstValueFrom(shared)))
+            }
         }
+    }) as Proxied<T>
+    const close = () => {
+        closed.complete()
+        connection.close()
+    }
+    return {
+        proxy,
+        close
     }
 }
 
@@ -144,17 +88,6 @@ export class ObservableAndPromise<T> extends Observable<T> implements PromiseLik
         return this.promise.then(onFulfilled, onRejected)
     }
 
-}
-
-export function proxy<T extends Target>(target: (command: string, ...data: readonly unknown[]) => unknown) {
-    return new Proxy(target, {
-        get(target, key) {
-            if (typeof key === "symbol") {
-                throw new Error("No symbol calls on a proxy.")
-            }
-            return (...args: unknown[]) => target(key, ...args)
-        }
-    }) as unknown as Proxied<T>
 }
 
 /**
