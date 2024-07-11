@@ -1,6 +1,6 @@
 import { customAlphabet } from "nanoid"
 import PLazy from "p-lazy"
-import { Observable, Subject, concatWith, dematerialize, filter, firstValueFrom, share, takeUntil, throwError } from "rxjs"
+import { Observable, Subject, concatWith, dematerialize, filter, firstValueFrom, from, share, takeUntil, throwError } from "rxjs"
 import { Channel } from "./channel"
 import { Proxied, Request, Response, Target } from "./types"
 
@@ -40,7 +40,7 @@ export function wrap<T extends Target>(options: WrapOptions): Remote<T> {
             return (...data: readonly unknown[]) => {
                 const observable = new Observable<unknown>(subscriber => {
                     const id = generateId()
-                    const observable = connection.observe.pipe(
+                    const observable = from(connection.observe).pipe(
                         filter(response => response.id === id),
                         dematerialize(),
                         takeUntil(closed.pipe(concatWith(throwError(() => new Error("This remote is closed."))))),

@@ -1,7 +1,7 @@
 
 import pDefer from "p-defer"
 import PLazy from "p-lazy"
-import { BehaviorSubject, EMPTY, Observable, ObservableNotification, ReplaySubject, Subject, Subscription, catchError, combineLatest, concatWith, defer, dematerialize, filter, finalize, first, firstValueFrom, from, fromEvent, ignoreElements, map, materialize, merge, mergeMap, of, share, shareReplay, startWith, switchMap, takeUntil, tap, throwError } from "rxjs"
+import { BehaviorSubject, EMPTY, Observable, ObservableNotification, ReplaySubject, Subject, Subscription, catchError, combineLatest, concatWith, defer, dematerialize, filter, finalize, first, firstValueFrom, from, fromEvent, ignoreElements, isObservable, map, materialize, merge, mergeMap, of, share, shareReplay, startWith, switchMap, takeUntil, tap, throwError } from "rxjs"
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
@@ -1003,7 +1003,7 @@ function call<T extends Target>(target: T, command: string | number | symbol, da
         }
         return property as Allowed
     })()
-    if (returned instanceof Observable) {
+    if (isObservable(returned)) {
         return returned
     }
     else {

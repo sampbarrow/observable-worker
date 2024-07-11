@@ -3,8 +3,8 @@ import { CompleteNotification, ErrorNotification, NextNotification, Observable }
 
 export type Target = object
 export type ID = string | number
-export type Primitive = string | number | boolean | null | undefined | void | bigint | { readonly [k: string]: Primitive } | readonly Primitive[]
-export type Allowed = Observable<unknown> | PromiseLike<unknown> | Primitive
+export type Primitive = boolean | string | number | null | undefined | readonly Primitive[] | object
+export type Allowed = Observable<Primitive> | Promise<Primitive> | Primitive
 export type Remoted<T> = T extends Observable<infer R> ? Observable<R> : (T extends PromiseLike<infer R> ? PromiseLike<R> : PromiseLike<T>)
 export type Input<T> = T extends ((...args: any) => Allowed) ? Parameters<T> : readonly void[]
 export type Output<T> = T extends ((...args: any) => Allowed) ? Remoted<ReturnType<T>> : Remoted<T>

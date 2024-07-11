@@ -1,8 +1,8 @@
 
-import { BehaviorSubject, Observable, filter, fromEvent, map, mergeMap, switchMap, takeUntil, tap, throwError } from "rxjs"
-import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
-import { ValueOrFactory, callOrGet } from "value-or-factory"
-import { Batcher, BatcherOptions } from "./batcher"
+import { BehaviorSubject, Observable, filter, from, fromEvent, mergeMap, switchMap, takeUntil, tap, throwError } from "rxjs";
+import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent";
+import { ValueOrFactory, callOrGet } from "value-or-factory";
+import { Batcher, BatcherOptions } from "./batcher";
 
 /**
  * A connection is used to send and receive messages.
@@ -47,7 +47,7 @@ export namespace Channel {
             const connection = channel()
             const batcher = new Batcher<O>(connection.send.bind(connection), options)
             return {
-                observe: connection.observe.pipe(mergeMap(items => items)),
+                observe: connection.observe.pipe(mergeMap(items => Array.isArray(items) ? items : throwError(() => new TypeError("Batching channel received a non-array message.")))),
                 send: batcher.add.bind(batcher),
                 close: () => {
                     batcher.process()
@@ -87,10 +87,11 @@ export namespace Channel {
 
     export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined): Channel<I, O> {
         return () => {
+            from
             const connection = callOrGet(open)
             const closed = new BehaviorSubject(false)
             return {
-                observe: fromEvent(connection, "message").pipe(map(event => event.data), takeUntil(closed.pipe(filter(closed => closed), switchMap(() => throwError(() => new Error("This channel is closed.")))))),
+                observe: fromEvent(connection, "message", event => event.data).pipe(takeUntil(closed.pipe(filter(closed => closed), switchMap(() => throwError(() => new Error("This channel is closed.")))))),
                 send: value => {
                     if (closed.getValue()) {
                         throw new Error("This channel is closed.")

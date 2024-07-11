@@ -1,8 +1,10 @@
 
-import { Observable, defer, filter, map, materialize, mergeMap, of, share, takeUntil } from "rxjs"
-import { callOrGet } from "value-or-factory"
+import { defer, filter, isObservable, map, materialize, mergeMap, of, share, takeUntil } from "rxjs"
 import { Channel } from "./channel"
-import { Member, Request, Response, SubscribeRequest, Target } from "./types"
+import { Allowed, Request, Response, SubscribeRequest, Target } from "./types"
+
+//TODO get rid of p-defer library when youre done with migrating worker
+//also get rid of value-or-factory
 
 export interface ExposeConfig<T extends Target> {
 
@@ -21,9 +23,14 @@ export function expose<T extends Target>(config: ExposeConfig<T>) {
                 if (!(request.command in config.target)) {
                     throw new TypeError("Command \"" + request.command + "\" does not exist on target.")
                 }
-                const property = (config.target as Record<string, Member>)[request.command]
-                const input = callOrGet(property, ...request.data)
-                const observable = (input instanceof Observable ? input : defer(async () => await input))
+                const property = config.target[request.command as keyof T]
+                const input = (() => {
+                    if (typeof property === "function") {
+                        return property.call(config.target, ...request.data) as Allowed
+                    }
+                    return property as Allowed
+                })()
+                const observable = isObservable(input) ? input : defer(async () => await input)
                 return observable.pipe(
                     materialize(),
                     map(response => {
@@ -36,7 +43,7 @@ export function expose<T extends Target>(config: ExposeConfig<T>) {
                         filter(message => {
                             return message.kind === "U" && message.id === request.id
                         })
-                    )),
+                    ))
                 )
             }
             catch (error) {
@@ -48,7 +55,7 @@ export function expose<T extends Target>(config: ExposeConfig<T>) {
             }
         })
     )
-    const subscription = observable.subscribe(response => connection.send(response))
+    const subscription = observable.subscribe(connection.send.bind(connection))
     return () => {
         subscription.unsubscribe()
         connection.close()
