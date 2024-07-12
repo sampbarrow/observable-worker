@@ -20,15 +20,13 @@
     "devDependencies": {
         "rxjs": "^7.8.1",
         "@rollup/plugin-typescript": "^11.1.5",
-        "@types/react": "^18.2.0",
         "@types/throttle-debounce": "^5.0.0",
         "@types/uuid": "^9.0.5",
         "rollup": "^4.0.2",
         "typescript": "^5.2.2"
     },
     "peerDependencies": {
-        "rxjs": "^7.8.1",
-        "react": "^18.2.0"
+        "rxjs": "^7.8.1"
     },
     "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }
