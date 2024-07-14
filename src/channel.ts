@@ -71,6 +71,10 @@ export namespace Channel {
         }
     }
 
+    export function worker(scriptUrl: string | URL, options?: WorkerOptions | undefined) {
+        return port(() => new Worker(scriptUrl, options), worker => worker.terminate())
+    }
+
     /**
      * A broadcast channel.
      * @param name The name of the channel.
