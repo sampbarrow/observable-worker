@@ -43,7 +43,7 @@ namespace Channel {
             return Connection.from<I, O>({
                 observable: connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
                 next: value => {
-                    console.log("Sending emission on channel " + name + ".", value)
+                    //console.log("Sending emission on channel " + name + ".", value)
                     connection.next(value)
                 },
                 close: connection.close,
@@ -387,7 +387,10 @@ namespace OldChannel {
                 const batcher = new Batcher<O>(connection.next.bind(connection), options)
                 return Connection.from<I, O>({
                     observable: connection.pipe(mergeMap(items => items)),
-                    next: batcher.add.bind(batcher),
+                    next: v => {
+                        //console.log("Sending object.", v)
+                        batcher.add(v)
+                    },
                     close: () => void 0,
                 })
             })
@@ -963,7 +966,10 @@ function expose<T extends Target>(config: ExposeConfig<T>) {
                             key: req.id,
                             observable: observable.pipe(
                                 catchError(error => {
-                                    return throwError(() => new RemoteError("call-failed", "Remote call to \"" + req.command + "\" failed.", { cause: error }))
+                                    return throwError(() => {
+                                        return error
+                                    })
+                                    //return throwError(() => new RemoteError("call-failed", "Remote call to \"" + req.command + "\" failed.", { cause: error }))
                                 }),
                                 materialize(),
                             )
