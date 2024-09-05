@@ -43,7 +43,7 @@ namespace Channel {
             return Connection.from<I, O>({
                 observable: connection.pipe(tap(emission => console.log("Received emission on channel " + name + ".", emission))),
                 next: value => {
-                    //console.log("Sending emission on channel " + name + ".", value)
+                    console.log("Sending emission on channel " + name + ".", value)
                     connection.next(value)
                 },
                 close: connection.close,
@@ -388,7 +388,7 @@ namespace OldChannel {
                 return Connection.from<I, O>({
                     observable: connection.pipe(mergeMap(items => items)),
                     next: v => {
-                        //console.log("Sending object.", v)
+                        console.log("Sending object.", v)
                         batcher.add(v)
                     },
                     close: () => void 0,
