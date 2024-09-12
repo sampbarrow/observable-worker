@@ -6,7 +6,27 @@ import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent"
 import { ValueOrFactory, callOrGet } from "value-or-factory"
 import { Batcher, BatcherOptions } from "./batcher"
 import { ObservableAndPromise, generateId } from "./wrap"
+/*
+function find() {
+    const channel = new BroadcastChannel("coordination")
+    channel.postMessage({
+        type: "request"
+    })
+}
+function advertise() {
+    navigator.locks.request("coordination", async () => {
+        const channel = new BroadcastChannel("coordination")
+        channel.onmessage = message => {
+            if (message.data.type === "request") {
 
+            }
+        }
+        channel.postMessage({
+            a: 1,
+        })
+    })
+}
+*/Batcher
 /**
  * A channel creates Connection objects.
  */
