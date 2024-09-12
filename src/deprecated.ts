@@ -388,7 +388,6 @@ namespace OldChannel {
                 return Connection.from<I, O>({
                     observable: connection.pipe(mergeMap(items => items)),
                     next: v => {
-                        console.log("Sending object.", v)
                         batcher.add(v)
                     },
                     close: () => void 0,
