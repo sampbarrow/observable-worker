@@ -634,34 +634,44 @@ function buildBroadcastFinder(context: string, createBroadcastChannel: Broadcast
 type LookupMessage = AskIfWorkerIsAvailableMessage | NewWorkerStartedMessage | WorkerIsAvailableMessage
 
 type AskIfWorkerIsAvailableMessage = {
+
     readonly type: "askIfWorkerIsAvailable"
+
 }
 
 type NewWorkerStartedMessage = {
+
     readonly type: "newWorkerStarted"
     readonly registrationChannelId: string
     readonly lockId: string
+
 }
 
 type WorkerIsAvailableMessage = {
+
     readonly type: "workerIsAvailable"
     readonly registrationChannelId: string
     readonly lockId: string
+
 }
 
 type RegistrationMessage = RegisterClientMessage | ClientRegisteredMessage
 
 type RegisterClientMessage = {
+
     readonly type: "registerClient"
     readonly clientId: string
     readonly lockId: string
     readonly callChannelId: string
     readonly answerChannelId: string
+
 }
 
 type ClientRegisteredMessage = {
+
     readonly type: "clientRegistered"
     readonly clientId: string
+
 }
 
 /**
