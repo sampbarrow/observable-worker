@@ -1,5 +1,5 @@
 
-import { BehaviorSubject, Observable, filter, from, fromEvent, mergeMap, switchMap, takeUntil, tap, throwError } from "rxjs";
+import { BehaviorSubject, Observable, filter, fromEvent, mergeMap, switchMap, takeUntil, tap, throwError } from "rxjs";
 import { HasEventTargetAddRemove } from "rxjs/internal/observable/fromEvent";
 import { ValueOrFactory, callOrGet } from "value-or-factory";
 import { Batcher, BatcherOptions } from "./batcher";
@@ -91,7 +91,6 @@ export namespace Channel {
 
     export function port<T extends Port<I, O>, I = never, O = unknown>(open: ValueOrFactory<T, []>, close?: ((port: T) => void) | undefined): Channel<I, O> {
         return () => {
-            from
             const connection = callOrGet(open)
             const closed = new BehaviorSubject(false)
             return {
